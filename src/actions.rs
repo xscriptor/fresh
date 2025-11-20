@@ -1453,6 +1453,7 @@ pub fn action_to_events(
         | Action::ToggleLineNumbers
         | Action::DumpConfig
         | Action::Search
+        | Action::FindInSelection
         | Action::FindNext
         | Action::FindPrevious
         | Action::Replace

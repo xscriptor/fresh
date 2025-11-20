@@ -856,6 +856,12 @@ impl Config {
                         when: None,
                     },
                     MenuItem::Action {
+                        label: "Find in Selection".to_string(),
+                        action: "find_in_selection".to_string(),
+                        args: HashMap::new(),
+                        when: Some("has_selection".to_string()),
+                    },
+                    MenuItem::Action {
                         label: "Replace...".to_string(),
                         action: "query_replace".to_string(),
                         args: HashMap::new(),

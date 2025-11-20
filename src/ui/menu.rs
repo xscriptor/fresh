@@ -8,6 +8,16 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
+fn is_menu_item_enabled(item: &MenuItem, selection_active: bool) -> bool {
+    match item {
+        MenuItem::Action { when, .. } => match when.as_deref() {
+            Some("has_selection") | Some("selection") => selection_active,
+            _ => true,
+        },
+        _ => true,
+    }
+}
+
 /// Menu bar state (tracks which menu is open and which item is highlighted)
 #[derive(Debug, Clone, Default)]
 pub struct MenuState {
@@ -81,6 +91,7 @@ impl MenuState {
     pub fn get_highlighted_action(
         &self,
         menus: &[Menu],
+        selection_active: bool,
     ) -> Option<(String, std::collections::HashMap<String, serde_json::Value>)> {
         let active_menu = self.active_menu?;
         let highlighted_item = self.highlighted_item?;
@@ -89,7 +100,13 @@ impl MenuState {
         let item = menu.items.get(highlighted_item)?;
 
         match item {
-            MenuItem::Action { action, args, .. } => Some((action.clone(), args.clone())),
+            MenuItem::Action { action, args, .. } => {
+                if is_menu_item_enabled(item, selection_active) {
+                    Some((action.clone(), args.clone()))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -157,6 +174,7 @@ impl MenuRenderer {
         keybindings: &crate::keybindings::KeybindingResolver,
         theme: &Theme,
         hover_target: Option<&crate::editor::HoverTarget>,
+        selection_active: bool,
     ) {
         // Combine config menus with plugin menus
         let all_menus: Vec<&Menu> = menu_config
@@ -232,6 +250,7 @@ impl MenuRenderer {
                     keybindings,
                     theme,
                     hover_target,
+                    selection_active,
                 );
             }
         }
@@ -248,6 +267,7 @@ impl MenuRenderer {
         keybindings: &crate::keybindings::KeybindingResolver,
         theme: &Theme,
         hover_target: Option<&crate::editor::HoverTarget>,
+        selection_active: bool,
     ) {
         // Calculate the x position of the dropdown based on menu index
         let mut x_offset = 0;
@@ -289,6 +309,7 @@ impl MenuRenderer {
                 hover_target,
                 Some(crate::editor::HoverTarget::MenuDropdownItem(mi, ii)) if *mi == menu_index && *ii == idx
             );
+            let enabled = is_menu_item_enabled(item, selection_active);
 
             let line = match item {
                 MenuItem::Action { label, action, .. } => {
@@ -319,7 +340,12 @@ impl MenuRenderer {
                         format!(" {:<label_width$} {}", label, keybinding)
                     };
 
-                    Line::from(vec![Span::styled(text, style)])
+                    let mut final_style = style;
+                    if !enabled {
+                        final_style = final_style.add_modifier(Modifier::DIM);
+                    }
+
+                    Line::from(vec![Span::styled(text, final_style)])
                 }
                 MenuItem::Separator { .. } => {
                     let separator = "─".repeat(max_width - 2);
@@ -527,17 +553,38 @@ mod tests {
         state.open_menu(0);
         state.highlighted_item = Some(2); // Save action
 
-        let action = state.get_highlighted_action(&menus);
+        let action = state.get_highlighted_action(&menus, false);
         assert!(action.is_some());
         let (action_name, _args) = action.unwrap();
         assert_eq!(action_name, "save");
     }
 
     #[test]
+    fn test_menu_item_when_requires_selection() {
+        let mut state = MenuState::new();
+        let select_menu = Menu {
+            label: "Edit".to_string(),
+            items: vec![MenuItem::Action {
+                label: "Find in Selection".to_string(),
+                action: "find_in_selection".to_string(),
+                args: HashMap::new(),
+                when: Some("has_selection".to_string()),
+            }],
+        };
+        state.open_menu(0);
+        state.highlighted_item = Some(0);
+
+        assert!(state
+            .get_highlighted_action(&[select_menu.clone()], false)
+            .is_none());
+        assert!(state.get_highlighted_action(&[select_menu], true).is_some());
+    }
+
+    #[test]
     fn test_get_highlighted_action_none_when_closed() {
         let state = MenuState::new();
         let menus = create_test_menus();
-        assert!(state.get_highlighted_action(&menus).is_none());
+        assert!(state.get_highlighted_action(&menus, false).is_none());
     }
 
     #[test]
@@ -547,7 +594,7 @@ mod tests {
         state.open_menu(0);
         state.highlighted_item = Some(1); // Separator
 
-        assert!(state.get_highlighted_action(&menus).is_none());
+        assert!(state.get_highlighted_action(&menus, false).is_none());
     }
 
     #[test]

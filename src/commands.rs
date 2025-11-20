@@ -371,6 +371,12 @@ pub fn get_all_commands() -> Vec<Command> {
             contexts: vec![KeyContext::Normal],
         },
         Command {
+            name: "Find in Selection".to_string(),
+            description: "Search only within the current selection".to_string(),
+            action: Action::FindInSelection,
+            contexts: vec![KeyContext::Normal],
+        },
+        Command {
             name: "Find Next".to_string(),
             description: "Jump to the next search match".to_string(),
             action: Action::FindNext,

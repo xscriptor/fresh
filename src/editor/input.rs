@@ -571,6 +571,7 @@ impl Editor {
                     "",
                     self.key_context,
                     &self.keybindings,
+                    self.has_active_selection(),
                 );
                 self.start_prompt_with_suggestions(
                     "Command: ".to_string(),
@@ -729,17 +730,21 @@ impl Editor {
                 if is_search_prompt {
                     self.confirm_prompt();
                 } else {
-                    self.start_search_prompt("Search: ".to_string(), PromptType::Search);
+                    self.start_search_prompt("Search: ".to_string(), PromptType::Search, false);
                 }
             }
             Action::Replace => {
-                self.start_search_prompt("Replace: ".to_string(), PromptType::ReplaceSearch);
+                self.start_search_prompt("Replace: ".to_string(), PromptType::ReplaceSearch, false);
             }
             Action::QueryReplace => {
                 self.start_search_prompt(
                     "Query replace: ".to_string(),
                     PromptType::QueryReplaceSearch,
+                    false,
                 );
+            }
+            Action::FindInSelection => {
+                self.start_search_prompt("Search: ".to_string(), PromptType::Search, true);
             }
             Action::FindNext => {
                 self.find_next();
@@ -882,8 +887,9 @@ impl Editor {
                     .cloned()
                     .collect();
 
-                if let Some((action_name, args)) =
-                    self.menu_state.get_highlighted_action(&all_menus)
+                if let Some((action_name, args)) = self
+                    .menu_state
+                    .get_highlighted_action(&all_menus, self.has_active_selection())
                 {
                     // Close the menu
                     self.menu_state.close_menu();

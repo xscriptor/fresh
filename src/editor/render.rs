@@ -367,6 +367,7 @@ impl Editor {
             &self.keybindings,
             &self.theme,
             self.mouse_state.hover_target.as_ref(),
+            self.has_active_selection(),
         );
     }
 
@@ -986,11 +987,7 @@ impl Editor {
             return;
         }
 
-        // Check if there's a selection for search-in-selection
-        let search_range = {
-            let state = self.active_state();
-            state.cursors.primary().selection_range()
-        };
+        let search_range = self.pending_search_range.take();
 
         let buffer_content = {
             let state = self.active_state();

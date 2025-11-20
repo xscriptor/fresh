@@ -32,6 +32,13 @@ fn test_basic_search_forward() {
 
     // Confirm search
     harness
+        .editor_mut()
+        .active_state_mut()
+        .cursors
+        .primary_mut()
+        .clear_selection();
+
+    harness
         .send_key(KeyCode::Enter, KeyModifiers::NONE)
         .unwrap();
     harness.render().unwrap();
@@ -55,6 +62,141 @@ fn test_basic_search_forward() {
     assert_eq!(
         cursor_pos, expected_pos,
         "Cursor should be at the start of second 'hello'"
+    );
+}
+
+/// Test that selecting a word pre-populates the search prompt and find next keeps working
+#[test]
+fn test_find_next_prefills_from_selection() {
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("search_selection.txt");
+    std::fs::write(&file_path, "alpha word beta word gamma").unwrap();
+
+    let mut harness = EditorTestHarness::new(80, 24).unwrap();
+    harness.open_file(&file_path).unwrap();
+
+    harness.send_key(KeyCode::Home, KeyModifiers::NONE).unwrap();
+    for _ in 0..8 {
+        harness
+            .send_key(KeyCode::Right, KeyModifiers::NONE)
+            .unwrap();
+    }
+
+    harness
+        .send_key(KeyCode::Char('w'), KeyModifiers::CONTROL)
+        .unwrap();
+
+    let selected_text = harness.get_selected_text();
+    assert_eq!(
+        selected_text, "word",
+        "Ctrl+W should select the word under the cursor"
+    );
+
+    harness
+        .send_key(KeyCode::Char('f'), KeyModifiers::CONTROL)
+        .unwrap();
+
+    harness.assert_screen_contains("Search: word");
+
+    // Clear selection so the confirmed search will run over the entire buffer
+    harness
+        .editor_mut()
+        .active_state_mut()
+        .cursors
+        .primary_mut()
+        .clear_selection();
+
+    harness
+        .editor_mut()
+        .active_state_mut()
+        .cursors
+        .primary_mut()
+        .position = 0;
+
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+
+    assert_eq!(
+        harness.cursor_position(),
+        6,
+        "Cursor should jump to the first 'word' match"
+    );
+
+    harness.send_key(KeyCode::F(3), KeyModifiers::NONE).unwrap();
+
+    assert_eq!(
+        harness.cursor_position(),
+        16,
+        "Find next should move to the following 'word'"
+    );
+}
+
+/// Command palette entry should run a search restricted to the current selection
+#[test]
+fn test_find_in_selection_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("search_selection.txt");
+    std::fs::write(&file_path, "alpha word beta word gamma").unwrap();
+
+    let mut harness = EditorTestHarness::new(80, 24).unwrap();
+    harness.open_file(&file_path).unwrap();
+
+    harness.send_key(KeyCode::Home, KeyModifiers::NONE).unwrap();
+    for _ in 0..8 {
+        harness
+            .send_key(KeyCode::Right, KeyModifiers::NONE)
+            .unwrap();
+    }
+
+    harness
+        .send_key(KeyCode::Char('w'), KeyModifiers::CONTROL)
+        .unwrap();
+
+    let selected_text = harness.get_selected_text();
+    assert_eq!(
+        selected_text, "word",
+        "Ctrl+W should select the word under the cursor"
+    );
+
+    // Open command palette and choose "Find in Selection"
+    harness
+        .send_key(KeyCode::Char('p'), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+    harness.type_text("Find in Selection").unwrap();
+    harness.render().unwrap();
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+
+    harness.render().unwrap();
+    harness.assert_screen_contains("Search: word");
+
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+
+    assert_eq!(
+        harness.cursor_position(),
+        6,
+        "Cursor should jump to the first 'word' match inside selection"
+    );
+
+    harness.send_key(KeyCode::F(3), KeyModifiers::NONE).unwrap();
+
+    assert_eq!(
+        harness.cursor_position(),
+        6,
+        "Find next should stay within the selection"
+    );
+
+    assert_eq!(
+        harness
+            .editor()
+            .get_status_message()
+            .map(|msg| msg.as_str()),
+        Some("No more matches.")
     );
 }
 

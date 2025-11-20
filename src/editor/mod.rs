@@ -192,6 +192,9 @@ pub struct Editor {
     /// Search state (if search is active)
     search_state: Option<SearchState>,
 
+    /// Pending search range that should be reused when the next search is confirmed
+    pending_search_range: Option<Range<usize>>,
+
     /// Interactive replace state (if interactive replace is active)
     interactive_replace_state: Option<InteractiveReplaceState>,
 
@@ -479,6 +482,7 @@ impl Editor {
             pending_inlay_hints_request: None,
             hover_symbol_range: None,
             search_state: None,
+            pending_search_range: None,
             interactive_replace_state: None,
             lsp_status: String::new(),
             mouse_state: MouseState::default(),
@@ -2040,31 +2044,39 @@ impl Editor {
         self.start_prompt_with_suggestions(message, prompt_type, Vec::new());
     }
 
-    /// Start a search prompt with the current selection as the default search string
+    /// Start a search prompt with an optional selection scope
     ///
-    /// This is used for Search, Replace, and QueryReplace actions.
-    /// If there's a single-line selection, it will be pre-filled in the prompt.
-    /// Otherwise, the last search history item is used as the default.
-    fn start_search_prompt(&mut self, message: String, prompt_type: PromptType) {
-        // Get selected text to use as default search string
-        let selected_text = {
-            let range = {
-                let state = self.active_state();
-                state.cursors.primary().selection_range()
-            };
-            if let Some(range) = range {
-                let state = self.active_state_mut();
-                let text = state.get_text_range(range.start, range.end);
-                // Only use single-line selections
-                if !text.contains('\n') && !text.is_empty() {
-                    Some(text)
-                } else {
-                    None
-                }
+    /// When `use_selection_range` is true and a single-line selection is present,
+    /// the search will be restricted to that range once confirmed.
+    fn start_search_prompt(
+        &mut self,
+        message: String,
+        prompt_type: PromptType,
+        use_selection_range: bool,
+    ) {
+        // Reset any previously stored selection range
+        self.pending_search_range = None;
+
+        let selection_range = {
+            let state = self.active_state();
+            state.cursors.primary().selection_range()
+        };
+
+        let selected_text = if let Some(range) = selection_range.clone() {
+            let state = self.active_state_mut();
+            let text = state.get_text_range(range.start, range.end);
+            if !text.contains('\n') && !text.is_empty() {
+                Some(text)
             } else {
                 None
             }
+        } else {
+            None
         };
+
+        if use_selection_range {
+            self.pending_search_range = selection_range;
+        }
 
         // Determine the default text: selection > last history > empty
         let from_history = selected_text.is_none();
@@ -2078,16 +2090,12 @@ impl Editor {
         if let Some(text) = default_text {
             if let Some(ref mut prompt) = self.prompt {
                 prompt.set_input(text.clone());
-                // Select all the pre-filled text so typing replaces it
                 prompt.selection_anchor = Some(0);
                 prompt.cursor_pos = text.len();
             }
-            // If pre-filling from history, initialize navigation at last item
-            // so pressing Up goes to the second-to-last item, not the same item
             if from_history {
                 self.search_history.init_at_last();
             }
-            // Trigger incremental search highlights for the pre-filled text
             self.update_search_highlights(&text);
         }
     }
@@ -2172,6 +2180,7 @@ impl Editor {
         }
 
         self.prompt = None;
+        self.pending_search_range = None;
         self.status_message = Some("Canceled".to_string());
     }
 
@@ -2241,6 +2250,15 @@ impl Editor {
         self.prompt.as_ref().map(|p| p.input.as_str())
     }
 
+    /// Check if the active cursor currently has a selection
+    pub fn has_active_selection(&self) -> bool {
+        self.active_state()
+            .cursors
+            .primary()
+            .selection_range()
+            .is_some()
+    }
+
     /// Get mutable reference to prompt (for input handling)
     pub fn prompt_mut(&mut self) -> Option<&mut Prompt> {
         self.prompt.as_mut()
@@ -2270,12 +2288,14 @@ impl Editor {
 
         match prompt_type {
             PromptType::Command => {
+                let selection_active = self.has_active_selection();
                 if let Some(prompt) = &mut self.prompt {
                     // Use the underlying context (not Prompt context) for filtering
                     prompt.suggestions = self.command_registry.read().unwrap().filter(
                         &input,
                         self.key_context,
                         &self.keybindings,
+                        selection_active,
                     );
                     prompt.selected_suggestion = if prompt.suggestions.is_empty() {
                         None

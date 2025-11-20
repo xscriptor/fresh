@@ -338,6 +338,7 @@ pub enum Action {
 
     // Search and replace
     Search,
+    FindInSelection,
     FindNext,
     FindPrevious,
     Replace,
@@ -580,6 +581,7 @@ impl Action {
             "dump_config" => Some(Action::DumpConfig),
 
             "search" => Some(Action::Search),
+            "find_in_selection" => Some(Action::FindInSelection),
             "find_next" => Some(Action::FindNext),
             "find_previous" => Some(Action::FindPrevious),
             "replace" => Some(Action::Replace),
@@ -1710,6 +1712,7 @@ impl KeybindingResolver {
             Action::SetBackgroundBlend => "Set background blend ratio".to_string(),
             Action::DumpConfig => "Dump config to file".to_string(),
             Action::Search => "Search for text in buffer".to_string(),
+            Action::FindInSelection => "Search within selection".to_string(),
             Action::FindNext => "Find next search match".to_string(),
             Action::FindPrevious => "Find previous search match".to_string(),
             Action::Replace => "Replace text in buffer".to_string(),

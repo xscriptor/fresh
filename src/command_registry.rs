@@ -4,6 +4,7 @@
 //! while maintaining the built-in command set.
 
 use crate::commands::{get_all_commands, Command, Suggestion};
+use crate::keybindings::Action;
 use crate::keybindings::KeyContext;
 use std::sync::{Arc, RwLock};
 
@@ -107,6 +108,7 @@ impl CommandRegistry {
         query: &str,
         current_context: KeyContext,
         keybinding_resolver: &crate::keybindings::KeybindingResolver,
+        selection_active: bool,
     ) -> Vec<Suggestion> {
         let query_lower = query.to_lowercase();
         let commands = self.get_all();
@@ -145,7 +147,10 @@ impl CommandRegistry {
             .into_iter()
             .filter(|cmd| matches_query(cmd))
             .map(|cmd| {
-                let available = is_available(&cmd);
+                let mut available = is_available(&cmd);
+                if cmd.action == Action::FindInSelection && !selection_active {
+                    available = false;
+                }
                 let keybinding =
                     keybinding_resolver.get_keybinding_for_action(&cmd.action, current_context);
                 let history_pos = self.history_position(&cmd.name);
@@ -343,7 +348,7 @@ mod tests {
             contexts: vec![KeyContext::Normal],
         });
 
-        let results = registry.filter("save", KeyContext::Normal, &keybindings);
+        let results = registry.filter("save", KeyContext::Normal, &keybindings, false);
         assert!(results.len() >= 2); // At least "Save File" + "Test Save"
 
         // Check that both built-in and custom commands appear
@@ -375,13 +380,13 @@ mod tests {
         });
 
         // In normal context, "Help Only" should be disabled
-        let results = registry.filter("", KeyContext::Normal, &keybindings);
+        let results = registry.filter("", KeyContext::Normal, &keybindings, false);
         let help_only = results.iter().find(|s| s.text == "Help Only");
         assert!(help_only.is_some());
         assert!(help_only.unwrap().disabled);
 
         // In help context, "Normal Only" should be disabled
-        let results = registry.filter("", KeyContext::Help, &keybindings);
+        let results = registry.filter("", KeyContext::Help, &keybindings, false);
         let normal_only = results.iter().find(|s| s.text == "Normal Only");
         assert!(normal_only.is_some());
         assert!(normal_only.unwrap().disabled);
@@ -465,7 +470,7 @@ mod tests {
         registry.record_usage("Open File");
 
         // Filter with empty query should return history-sorted results
-        let results = registry.filter("", KeyContext::Normal, &keybindings);
+        let results = registry.filter("", KeyContext::Normal, &keybindings, false);
 
         // Find positions of our test commands in results
         let open_pos = results.iter().position(|s| s.text == "Open File").unwrap();
@@ -529,7 +534,7 @@ mod tests {
         // Use one built-in command
         registry.record_usage("Save File");
 
-        let results = registry.filter("", KeyContext::Normal, &keybindings);
+        let results = registry.filter("", KeyContext::Normal, &keybindings, false);
 
         let save_pos = results.iter().position(|s| s.text == "Save File").unwrap();
         let alpha_pos = results
