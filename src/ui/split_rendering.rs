@@ -17,6 +17,66 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::collections::HashMap;
+use std::ops::Range;
+
+/// Build view lines and mapping from a transform payload
+fn build_view_lines_and_map(
+    payload: &ViewTransformPayload,
+) -> (Vec<(usize, String)>, Vec<Option<usize>>, HashMap<usize, usize>) {
+    let mut view_text = String::new();
+    let mut mapping: Vec<Option<usize>> = Vec::new();
+
+    for token in &payload.tokens {
+        match &token.kind {
+            crate::plugin_api::ViewTokenWireKind::Text(t) => {
+                let base = token.source_offset;
+                let mut byte_idx = 0;
+                for ch in t.chars() {
+                    let ch_len = ch.len_utf8();
+                    view_text.push(ch);
+                    let source = base.map(|s| s + byte_idx);
+                    for offset in 0..ch_len {
+                        mapping.push(source.map(|s| s + offset));
+                    }
+                    byte_idx += ch_len;
+                }
+            }
+            crate::plugin_api::ViewTokenWireKind::Newline => {
+                view_text.push('\n');
+                mapping.push(token.source_offset);
+            }
+            crate::plugin_api::ViewTokenWireKind::Space => {
+                view_text.push(' ');
+                mapping.push(token.source_offset);
+            }
+        }
+    }
+
+    // Build source->view map (first occurrence)
+    let mut source_to_view = HashMap::new();
+    for (view_idx, src_opt) in mapping.iter().enumerate() {
+        if let Some(src) = src_opt {
+            source_to_view.entry(*src).or_insert(view_idx);
+        }
+    }
+
+    // Split into lines with starting view offsets
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for line in view_text.split_inclusive('\n') {
+        let mut text = line.to_string();
+        if text.ends_with('\n') {
+            text.pop();
+        }
+        lines.push((offset, text));
+        offset += line.len();
+    }
+    if view_text.is_empty() {
+        lines.push((0, String::new()));
+    }
+
+    (lines, mapping, source_to_view)
+}
 
 /// Renders split panes and their content
 pub struct SplitRenderer;
