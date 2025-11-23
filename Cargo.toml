@@ -1,9 +1,17 @@
 [package]
-name = "fresh"
+name = "fresh-editor"
 version = "0.1.0"
 authors = ["Noam Lewis"]
 edition = "2021"
 repository = "https://github.com/sinelaw/fresh"
+
+[[bin]]
+name = "fresh"
+path = "src/main.rs"
+
+[lib]
+name = "fresh"
+path = "src/lib.rs"
 
 [dependencies]
 crossterm = { version = "0.29.0", features = ["osc52"] }
