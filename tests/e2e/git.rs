@@ -2010,6 +2010,21 @@ fn trigger_test_view_marker(harness: &mut EditorTestHarness) {
     harness.render().unwrap();
 }
 
+/// Helper to trigger test view marker with many virtual lines via command palette
+fn trigger_test_view_marker_many_virtual_lines(harness: &mut EditorTestHarness) {
+    harness
+        .send_key(KeyCode::Char('p'), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+    harness
+        .type_text("Test View Marker (Many Virtual Lines)")
+        .unwrap();
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+}
+
 /// MINIMAL REPRODUCTION: View transform header at byte 0 should be visible
 ///
 /// This is the simplest possible test for the bug described in docs/BLAME.md:
@@ -2101,6 +2116,61 @@ fn test_view_transform_header_at_byte_zero() {
          Expected to see 'HEADER AT BYTE 0' on screen.\n\
          This reproduces the bug where headers injected at startByte=0 have empty text.\n\
          Screen:\n{screen_after}"
+    );
+}
+
+/// Ensure scrolling still works when a view transform injects many virtual lines
+#[test]
+fn test_view_transform_scroll_with_many_virtual_lines() {
+    init_tracing_from_env();
+
+    let repo = GitTestRepo::new();
+
+    repo.create_file("test.txt", "placeholder");
+    repo.git_add(&["test.txt"]);
+    repo.git_commit("Initial commit");
+    repo.setup_test_view_marker_plugin();
+
+    let mut harness = EditorTestHarness::with_config_and_working_dir(
+        120,
+        20,
+        Config::default(),
+        repo.path.clone(),
+    )
+    .unwrap();
+
+    // Open the test file (so the virtual buffer has a split to attach to)
+    let file_path = repo.path.join("test.txt");
+    harness.open_file(&file_path).unwrap();
+    harness.wait_until(|h| !h.get_buffer_content().is_empty())
+        .unwrap();
+
+    // Launch the view marker that injects many virtual lines
+    trigger_test_view_marker_many_virtual_lines(&mut harness);
+
+    // Wait for header to appear
+    let header_seen = harness
+        .wait_for_async(|h| h.screen_to_string().contains("HEADER AT BYTE 0"), 5000)
+        .unwrap();
+    assert!(header_seen, "Header should appear even with virtual pad lines");
+
+    // Scroll down repeatedly with cursor Down; should eventually reach real content lines
+    for _ in 0..500 {
+        harness
+            .send_key(KeyCode::Down, KeyModifiers::NONE)
+            .unwrap();
+        harness.process_async_and_render().unwrap();
+    }
+    harness.render().unwrap();
+
+    let screen = harness.screen_to_string();
+    println!("Screen after scrolling through many virtual lines:\n{screen}");
+
+    assert!(
+        screen.contains("Line 3")
+            || screen.contains("Line 2")
+            || screen.contains("Virtual pad 80"),
+        "Scrolling should reach real content (or deep virtual pads) after many virtual lines"
     );
 }
 
