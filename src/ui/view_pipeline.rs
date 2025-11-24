@@ -196,24 +196,31 @@ impl<'a> Iterator for ViewLineIterator<'a> {
 /// Determine if a display line should show a line number
 ///
 /// Rules:
-/// - Injected content (first char has source_offset: None): no line number
 /// - Wrapped continuation (line_start == AfterBreak): no line number
+/// - Injected content (first char has source_offset: None): no line number
+/// - Empty line at beginning or after source newline: yes line number
 /// - Otherwise: show line number
 pub fn should_show_line_number(line: &ViewLine) -> bool {
-    // Check if this line contains injected (non-source) content
-    let first_char_is_source = line
-        .char_mappings
-        .first()
-        .map(|m| m.is_some())
-        .unwrap_or(false);
-
-    if !first_char_is_source {
-        // Injected line (header, etc.) - no line number
+    // Wrapped continuations never show line numbers
+    if line.line_start.is_continuation() {
         return false;
     }
 
-    if line.line_start.is_continuation() {
-        // Wrapped continuation - no line number
+    // Check if this line contains injected (non-source) content
+    // An empty line is NOT injected if it's at the beginning or after a source newline
+    if line.char_mappings.is_empty() {
+        // Empty line - show line number if it's at beginning or after source newline
+        // (not after injected newline or break)
+        return matches!(
+            line.line_start,
+            LineStart::Beginning | LineStart::AfterSourceNewline
+        );
+    }
+
+    let first_char_is_source = line.char_mappings.first().map(|m| m.is_some()).unwrap_or(false);
+
+    if !first_char_is_source {
+        // Injected line (header, etc.) - no line number
         return false;
     }
 
