@@ -5,29 +5,29 @@ expression: "&screen_text"
  File   Edit   View   Selection   Go   Help                                     
 ┌ File Explorer ───────┐ [No Name]                                              
 │▼ project_root        │    1 │                                                █
-│  ▼ src               │                                                       █
-│      main.rs         │                                                       █
-│    README.md         │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-│                      │                                                       █
-└──────────────────────┘                                                       █
+│  ▼ src               │~                                                      █
+│      main.rs         │~                                                      █
+│    README.md         │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+│                      │~                                                      █
+└──────────────────────┘~                                                      █
 [No Name] | Ln 0, Col 0 | Expanded: src                         Palette: Ctrl+P
