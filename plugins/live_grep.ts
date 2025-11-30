@@ -77,62 +77,96 @@ function parseRipgrepOutput(stdout: string): {
   return { results, suggestions };
 }
 
-// Create or update preview with real file buffer
+// Create or update preview buffer with file content
 async function updatePreview(match: GrepMatch): Promise<void> {
   try {
-    if (!previewCreated) {
-      // Create a split first with a placeholder virtual buffer
+    // Read the file content
+    const content = await editor.readFile(match.file);
+    const lines = content.split("\n");
+
+    // Calculate context window (5 lines before and after)
+    const contextBefore = 5;
+    const contextAfter = 5;
+    const startLine = Math.max(0, match.line - 1 - contextBefore);
+    const endLine = Math.min(lines.length, match.line + contextAfter);
+
+    // Build preview entries with highlighting
+    const entries: TextPropertyEntry[] = [];
+
+    // Header
+    entries.push({
+      text: `  ${match.file}:${match.line}:${match.column}\n`,
+      properties: { type: "header" },
+    });
+    entries.push({
+      text: "─".repeat(60) + "\n",
+      properties: { type: "separator" },
+    });
+
+    // Content lines with line numbers
+    for (let i = startLine; i < endLine; i++) {
+      const lineNum = i + 1;
+      const lineContent = lines[i] || "";
+      const isMatchLine = lineNum === match.line;
+      const prefix = isMatchLine ? "▶ " : "  ";
+      const lineNumStr = String(lineNum).padStart(4, " ");
+
+      entries.push({
+        text: `${prefix}${lineNumStr} │ ${lineContent}\n`,
+        properties: {
+          type: isMatchLine ? "match" : "context",
+          line: lineNum,
+        },
+      });
+    }
+
+    // Create or update the preview buffer
+    if (previewBufferId === null) {
+      // Define mode for preview buffer
+      editor.defineMode("live-grep-preview", "special", [["q", "close_buffer"]], true);
+
+      // Create preview in a split on the right
       const result = await editor.createVirtualBufferInSplit({
-        name: "*Loading...*",
-        mode: "normal",
+        name: "*Preview*",
+        mode: "live-grep-preview",
         read_only: true,
-        entries: [{ text: "Loading preview...", properties: {} }],
+        entries,
         ratio: 0.5,
         direction: "vertical",
+        panel_id: "live-grep-preview",
         show_line_numbers: false,
+        editing_disabled: true,
       });
 
+      // Extract buffer and split IDs from result
+      previewBufferId = result.buffer_id;
       previewSplitId = result.split_id ?? null;
-      previewCreated = true;
-
-      // Now open the real file in that split
-      if (previewSplitId !== null) {
-        editor.openFileInSplit(previewSplitId, match.file, match.line, match.column);
-        previewBufferId = editor.getActiveBufferId();
-
-        // Close the placeholder virtual buffer
-        if (result.buffer_id) {
-          editor.closeBuffer(result.buffer_id);
-        }
-      }
 
       // Return focus to original split so prompt stays active
       if (originalSplitId !== null) {
         editor.focusSplit(originalSplitId);
       }
-    } else if (previewSplitId !== null) {
-      // Update preview: open file in existing preview split
-      editor.openFileInSplit(previewSplitId, match.file, match.line, match.column);
-      previewBufferId = editor.getActiveBufferId();
-
-      // Return focus to original split
-      if (originalSplitId !== null) {
-        editor.focusSplit(originalSplitId);
-      }
+    } else {
+      // Update existing buffer content
+      editor.setVirtualBufferContent(previewBufferId, entries);
     }
   } catch (e) {
     editor.debug(`Failed to update preview: ${e}`);
   }
 }
 
-// Close preview split (buffer will be closed with it)
+// Close preview buffer and its split
 function closePreview(): void {
+  // Close the buffer first
+  if (previewBufferId !== null) {
+    editor.closeBuffer(previewBufferId);
+    previewBufferId = null;
+  }
+  // Then close the split
   if (previewSplitId !== null) {
     editor.closeSplit(previewSplitId);
     previewSplitId = null;
-    previewBufferId = null;
   }
-  previewCreated = false;
 }
 
 // Run ripgrep search
@@ -196,8 +230,6 @@ globalThis.start_live_grep = function (): void {
   grepResults = [];
   lastQuery = "";
   previewBufferId = null;
-  previewSplitId = null;
-  previewCreated = false;
 
   // Remember original split to keep focus
   originalSplitId = editor.getActiveSplitId();
@@ -244,7 +276,7 @@ globalThis.onLiveGrepSelectionChanged = function (args: {
   return true;
 };
 
-// Handle prompt confirmation - keep preview open and focus it
+// Handle prompt confirmation - open file
 globalThis.onLiveGrepPromptConfirmed = function (args: {
   prompt_type: string;
   selected_index: number | null;
@@ -254,15 +286,11 @@ globalThis.onLiveGrepPromptConfirmed = function (args: {
     return true;
   }
 
-  // If we have a preview, focus it (file is already open there)
-  if (previewSplitId !== null) {
-    editor.focusSplit(previewSplitId);
-    if (args.selected_index !== null && grepResults[args.selected_index]) {
-      const selected = grepResults[args.selected_index];
-      editor.setStatus(`Opened ${selected.file}:${selected.line}`);
-    }
-  } else if (args.selected_index !== null && grepResults[args.selected_index]) {
-    // No preview split, open file in original split
+  // Close preview first
+  closePreview();
+
+  // Open selected file
+  if (args.selected_index !== null && grepResults[args.selected_index]) {
     const selected = grepResults[args.selected_index];
     editor.openFile(selected.file, selected.line, selected.column);
     editor.setStatus(`Opened ${selected.file}:${selected.line}`);
@@ -270,17 +298,15 @@ globalThis.onLiveGrepPromptConfirmed = function (args: {
     editor.setStatus("No file selected");
   }
 
-  // Clear state but don't close preview
+  // Clear state
   grepResults = [];
   originalSplitId = null;
   previewSplitId = null;
-  previewBufferId = null;
-  previewCreated = false;
 
   return true;
 };
 
-// Handle prompt cancellation - close preview
+// Handle prompt cancellation
 globalThis.onLiveGrepPromptCancelled = function (args: {
   prompt_type: string;
 }): boolean {
@@ -292,6 +318,7 @@ globalThis.onLiveGrepPromptCancelled = function (args: {
   closePreview();
   grepResults = [];
   originalSplitId = null;
+  previewSplitId = null;
   editor.setStatus("Live grep cancelled");
 
   return true;
