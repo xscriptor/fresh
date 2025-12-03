@@ -509,6 +509,29 @@ function deleteNestedValue(obj: Record<string, unknown>, path: string): void {
 }
 
 /**
+ * Calculate UTF-8 byte length of a string without using TextEncoder
+ * (TextEncoder is not available in Deno plugin runtime)
+ */
+function getUtf8ByteLength(str: string): number {
+  let length = 0;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code < 0x80) {
+      length += 1;
+    } else if (code < 0x800) {
+      length += 2;
+    } else if (code < 0xD800 || code >= 0xE000) {
+      length += 3;
+    } else {
+      // Surrogate pair (e.g., emoji) - skip next char too
+      i++;
+      length += 4;
+    }
+  }
+  return length;
+}
+
+/**
  * Deep clone an object
  */
 function deepClone<T>(obj: T): T {
@@ -964,7 +987,7 @@ function updateDisplay(): void {
       const lines = state.cachedContent.split("\n");
       let byteOffset = 0;
       for (let i = 0; i < targetLineIndex && i < lines.length; i++) {
-        byteOffset += new TextEncoder().encode(lines[i] + "\n").length;
+        byteOffset += getUtf8ByteLength(lines[i] + "\n");
       }
       editor.setBufferCursor(state.bufferId, byteOffset);
     }

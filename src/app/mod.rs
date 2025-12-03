@@ -1175,6 +1175,9 @@ impl Editor {
             .get_mut(&buffer_id)
             .ok_or_else(|| "Buffer not found".to_string())?;
 
+        // Save current cursor position to preserve it after content update
+        let old_cursor_pos = state.cursors.primary().position;
+
         // Build text and properties from entries
         let (text, properties) =
             crate::primitives::text_property::TextPropertyManager::from_entries(entries);
@@ -1192,8 +1195,12 @@ impl Editor {
         // Set text properties
         state.text_properties = properties;
 
-        // Reset cursor to beginning
-        state.cursors.primary_mut().position = 0;
+        // Preserve cursor position (clamped to new content length and snapped to char boundary)
+        let new_len = state.buffer.len();
+        let clamped_pos = old_cursor_pos.min(new_len);
+        // Ensure cursor is at a valid UTF-8 character boundary
+        let new_cursor_pos = state.buffer.prev_char_boundary(clamped_pos);
+        state.cursors.primary_mut().position = new_cursor_pos;
         state.cursors.primary_mut().anchor = None;
 
         Ok(())
