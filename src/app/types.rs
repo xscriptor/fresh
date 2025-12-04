@@ -326,6 +326,12 @@ pub(super) struct MouseState {
     pub drag_start_explorer_width: Option<f32>,
     /// Current hover target (if any)
     pub hover_target: Option<HoverTarget>,
+    /// Whether we're currently doing a text selection drag
+    pub dragging_text_selection: bool,
+    /// The split where text selection started
+    pub drag_selection_split: Option<SplitId>,
+    /// The buffer byte position where the selection anchor is
+    pub drag_selection_anchor: Option<usize>,
 }
 
 /// Mapping from visual row to buffer positions for mouse click handling

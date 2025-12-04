@@ -2287,6 +2287,10 @@ impl Editor {
                 self.mouse_state.drag_start_ratio = None;
                 self.mouse_state.dragging_file_explorer = false;
                 self.mouse_state.drag_start_explorer_width = None;
+                // Clear text selection drag state (selection remains in cursor)
+                self.mouse_state.dragging_text_selection = false;
+                self.mouse_state.drag_selection_split = None;
+                self.mouse_state.drag_selection_anchor = None;
                 needs_render = true;
             }
             MouseEventKind::Moved => {
@@ -2911,6 +2915,92 @@ impl Editor {
             return Ok(());
         }
 
+        // If dragging to select text
+        if self.mouse_state.dragging_text_selection {
+            self.handle_text_selection_drag(col, row)?;
+            return Ok(());
+        }
+
+        Ok(())
+    }
+
+    /// Handle text selection drag - extends selection from anchor to current position
+    fn handle_text_selection_drag(&mut self, col: u16, row: u16) -> std::io::Result<()> {
+        use crate::model::event::Event;
+
+        let Some(split_id) = self.mouse_state.drag_selection_split else {
+            return Ok(());
+        };
+        let Some(anchor_position) = self.mouse_state.drag_selection_anchor else {
+            return Ok(());
+        };
+
+        // Find the buffer for this split
+        let buffer_id = self
+            .cached_layout
+            .split_areas
+            .iter()
+            .find(|(sid, _, _, _, _, _)| *sid == split_id)
+            .map(|(_, bid, _, _, _, _)| *bid);
+
+        let Some(buffer_id) = buffer_id else {
+            return Ok(());
+        };
+
+        // Find the content rect for this split
+        let content_rect = self
+            .cached_layout
+            .split_areas
+            .iter()
+            .find(|(sid, _, _, _, _, _)| *sid == split_id)
+            .map(|(_, _, rect, _, _, _)| *rect);
+
+        let Some(content_rect) = content_rect else {
+            return Ok(());
+        };
+
+        // Get cached view line mappings for this split
+        let cached_mappings = self
+            .cached_layout
+            .view_line_mappings
+            .get(&split_id)
+            .cloned();
+
+        // Calculate the target position from screen coordinates
+        if let Some(state) = self.buffers.get_mut(&buffer_id) {
+            let gutter_width = state.margins.left_total_width() as u16;
+            let fallback = state.viewport.top_byte;
+
+            let Some(target_position) = Self::screen_to_buffer_position(
+                col,
+                row,
+                content_rect,
+                gutter_width,
+                &cached_mappings,
+                fallback,
+                true, // Allow gutter clicks for drag selection
+            ) else {
+                return Ok(());
+            };
+
+            // Move cursor to target position while keeping anchor to create selection
+            let primary_cursor_id = state.cursors.primary_id();
+            let event = Event::MoveCursor {
+                cursor_id: primary_cursor_id,
+                old_position: 0,
+                new_position: target_position,
+                old_anchor: None,
+                new_anchor: Some(anchor_position), // Keep anchor to maintain selection
+                old_sticky_column: 0,
+                new_sticky_column: 0,
+            };
+
+            if let Some(event_log) = self.event_logs.get_mut(&buffer_id) {
+                event_log.append(event.clone());
+            }
+            state.apply(&event);
+        }
+
         Ok(())
     }
 
@@ -3368,6 +3458,59 @@ impl Editor {
         max_byte_pos
     }
 
+    /// Calculate buffer byte position from screen coordinates
+    ///
+    /// Returns None if the position cannot be determined (e.g., click in gutter for click handler)
+    fn screen_to_buffer_position(
+        col: u16,
+        row: u16,
+        content_rect: ratatui::layout::Rect,
+        gutter_width: u16,
+        cached_mappings: &Option<Vec<crate::app::types::ViewLineMapping>>,
+        fallback_position: usize,
+        allow_gutter_click: bool,
+    ) -> Option<usize> {
+        // Calculate relative position in content area
+        let content_col = col.saturating_sub(content_rect.x);
+        let content_row = row.saturating_sub(content_rect.y);
+
+        // Handle gutter clicks
+        let text_col = if content_col < gutter_width {
+            if !allow_gutter_click {
+                return None; // Click handler skips gutter clicks
+            }
+            0 // Drag handler uses position 0 of the line
+        } else {
+            content_col.saturating_sub(gutter_width) as usize
+        };
+
+        // Use cached view line mappings for accurate position lookup
+        let visual_row = content_row as usize;
+        let position = cached_mappings
+            .as_ref()
+            .and_then(|mappings| mappings.get(visual_row))
+            .map(|line_mapping| {
+                if text_col < line_mapping.char_mappings.len() {
+                    if let Some(byte_pos) = line_mapping.char_mappings[text_col] {
+                        return byte_pos;
+                    }
+                    // Column maps to virtual/injected content - find nearest real position
+                    for c in (0..text_col).rev() {
+                        if let Some(byte_pos) = line_mapping.char_mappings[c] {
+                            return byte_pos;
+                        }
+                    }
+                    line_mapping.line_end_byte
+                } else {
+                    // Click is past end of visible content
+                    line_mapping.line_end_byte
+                }
+            })
+            .unwrap_or(fallback_position);
+
+        Some(position)
+    }
+
     /// Handle click in editor content area
     pub(super) fn handle_editor_click(
         &mut self,
@@ -3411,49 +3554,20 @@ impl Editor {
 
         // Calculate clicked position in buffer
         if let Some(state) = self.buffers.get_mut(&buffer_id) {
-            // Account for left margin (line numbers)
             let gutter_width = state.margins.left_total_width() as u16;
+            let fallback = state.viewport.top_byte;
 
-            // Calculate relative position in content area
-            let content_col = col.saturating_sub(content_rect.x);
-            let content_row = row.saturating_sub(content_rect.y);
-
-            // Skip if click is in the gutter
-            if content_col < gutter_width {
-                return Ok(());
-            }
-
-            // Adjust for gutter - this gives us the display column in the text area
-            let text_col = content_col.saturating_sub(gutter_width) as usize;
-
-            // Use cached view line mappings for accurate position lookup
-            // This properly handles line wrapping, virtual lines, and multi-byte characters
-            let visual_row = content_row as usize;
-            let target_position = cached_mappings
-                .as_ref()
-                .and_then(|mappings| mappings.get(visual_row))
-                .map(|line_mapping| {
-                    // First try to get the exact column position from char_mappings
-                    if text_col < line_mapping.char_mappings.len() {
-                        // Direct lookup - check if this column has a valid buffer position
-                        if let Some(byte_pos) = line_mapping.char_mappings[text_col] {
-                            return byte_pos;
-                        }
-                        // Column exists but maps to virtual/injected content
-                        // Find the nearest real position by searching backwards
-                        for col in (0..text_col).rev() {
-                            if let Some(byte_pos) = line_mapping.char_mappings[col] {
-                                return byte_pos;
-                            }
-                        }
-                        // No real position found before click - use line_end_byte
-                        line_mapping.line_end_byte
-                    } else {
-                        // Click is past the end of visible content - use line_end_byte
-                        line_mapping.line_end_byte
-                    }
-                })
-                .unwrap_or(state.viewport.top_byte); // Fallback to viewport start if no mapping
+            let Some(target_position) = Self::screen_to_buffer_position(
+                col,
+                row,
+                content_rect,
+                gutter_width,
+                &cached_mappings,
+                fallback,
+                false, // Don't allow gutter clicks
+            ) else {
+                return Ok(()); // Click was in gutter
+            };
 
             // Check for onClick text property at this position
             // This enables clickable UI elements in virtual buffers
@@ -3481,14 +3595,14 @@ impl Editor {
                 return Ok(());
             }
 
-            // Move the primary cursor to this position
+            // Move the primary cursor to this position and clear selection
             let primary_cursor_id = state.cursors.primary_id();
             let event = Event::MoveCursor {
                 cursor_id: primary_cursor_id,
                 old_position: 0, // TODO: Get actual old position
                 new_position: target_position,
                 old_anchor: None, // TODO: Get actual old anchor
-                new_anchor: None,
+                new_anchor: None, // Clear selection on click
                 old_sticky_column: 0,
                 new_sticky_column: 0, // Reset sticky column for goto line
             };
@@ -3504,6 +3618,11 @@ impl Editor {
                 self.position_history
                     .record_movement(buffer_id, target_position, None);
             }
+
+            // Set up drag selection state for potential text selection
+            self.mouse_state.dragging_text_selection = true;
+            self.mouse_state.drag_selection_split = Some(split_id);
+            self.mouse_state.drag_selection_anchor = Some(target_position);
         }
 
         Ok(())

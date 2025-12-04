@@ -1150,6 +1150,143 @@ fn test_tab_hover_position_accuracy() {
     }
 }
 
+/// Test drag-to-select text in the editor
+#[test]
+fn test_drag_to_select_text() {
+    let mut harness = EditorTestHarness::new(80, 24).unwrap();
+
+    // Load a file with some content
+    let content = "Hello World\nSecond line here\nThird line\n";
+    let _fixture = harness.load_buffer_from_text(content).unwrap();
+    harness.render().unwrap();
+
+    // Verify no initial selection
+    assert!(
+        !harness.has_selection(),
+        "Should have no selection initially"
+    );
+
+    // Get content area info - first row of content after tab bar
+    let (content_first_row, _) = harness.content_area_rows();
+
+    // Drag from start of "Hello" to end of "World" on first line
+    // Looking at the screen: "    1 │ Hello World" - the gutter is ~8 chars
+    // Text starts at around column 8-9
+    let start_col = 9;
+    let end_col = 19;
+    let row = content_first_row as u16;
+
+    harness.mouse_drag(start_col, row, end_col, row).unwrap();
+    harness.render().unwrap();
+
+    // Should now have a selection
+    assert!(harness.has_selection(), "Should have selection after drag");
+
+    // Get the selected text
+    let selected = harness.get_selected_text();
+    println!("Selected text: '{}'", selected);
+
+    // The selection should contain part of "Hello World"
+    assert!(!selected.is_empty(), "Selected text should not be empty");
+
+    // Verify the selection range exists
+    let range = harness.get_selection_range();
+    assert!(range.is_some(), "Should have a selection range");
+    let range = range.unwrap();
+    println!("Selection range: {} to {}", range.start, range.end);
+    assert!(
+        range.end > range.start,
+        "Selection end ({}) should be greater than start ({})",
+        range.end,
+        range.start
+    );
+}
+
+/// Test drag-to-select across multiple lines
+#[test]
+fn test_drag_to_select_multiple_lines() {
+    let mut harness = EditorTestHarness::new(80, 24).unwrap();
+
+    // Load content with multiple lines
+    let content = "Line one\nLine two\nLine three\n";
+    let _fixture = harness.load_buffer_from_text(content).unwrap();
+    harness.render().unwrap();
+
+    let (content_first_row, _) = harness.content_area_rows();
+
+    // Drag from first line to third line
+    // The gutter is ~8 chars, so text starts at column 8-9
+    let start_col = 9;
+    let start_row = content_first_row as u16;
+    let end_col = 14;
+    let end_row = content_first_row as u16 + 2; // Third line
+
+    println!(
+        "Dragging from ({}, {}) to ({}, {})",
+        start_col, start_row, end_col, end_row
+    );
+    harness
+        .mouse_drag(start_col, start_row, end_col, end_row)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Should have selection
+    assert!(
+        harness.has_selection(),
+        "Should have selection after multi-line drag"
+    );
+
+    // Selection should span multiple lines (contain newline)
+    let selected = harness.get_selected_text();
+    println!("Selected text: '{}'", selected);
+
+    // The selection should span across lines
+    let range = harness.get_selection_range();
+    assert!(range.is_some(), "Should have selection range");
+    let range = range.unwrap();
+    println!("Selection range: {} to {}", range.start, range.end);
+
+    // Multi-line selection should have a reasonable span
+    assert!(
+        range.end - range.start > 5,
+        "Multi-line selection should span more than 5 bytes"
+    );
+}
+
+/// Test that selection clears on mouse click
+#[test]
+fn test_click_clears_selection() {
+    let mut harness = EditorTestHarness::new(80, 24).unwrap();
+
+    let content = "Some text to select\n";
+    let _fixture = harness.load_buffer_from_text(content).unwrap();
+    harness.render().unwrap();
+
+    let (content_first_row, _) = harness.content_area_rows();
+    let row = content_first_row as u16;
+
+    // Create a selection via drag (gutter is ~8 chars)
+    harness.mouse_drag(9, row, 17, row).unwrap();
+    harness.render().unwrap();
+
+    assert!(harness.has_selection(), "Should have selection after drag");
+
+    // Click somewhere else to clear selection
+    harness.mouse_click(12, row).unwrap();
+    harness.render().unwrap();
+
+    // Selection should be cleared (anchor should equal cursor position)
+    // Note: A single click sets both cursor and anchor to the same position
+    let range = harness.get_selection_range();
+    if let Some(range) = range {
+        assert_eq!(
+            range.start, range.end,
+            "After click, selection should be empty (start={}, end={})",
+            range.start, range.end
+        );
+    }
+}
+
 /// Test tab hover with real files (which have line numbers, actual filenames, etc.)
 /// This more closely matches real-world usage
 #[test]
