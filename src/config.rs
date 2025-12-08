@@ -554,6 +554,37 @@ impl Config {
             },
         );
 
+        languages.insert(
+            "c".to_string(),
+            LanguageConfig {
+                extensions: vec!["c".to_string(), "h".to_string()],
+                grammar: "c".to_string(),
+                comment_prefix: Some("//".to_string()),
+                auto_indent: true,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+            },
+        );
+
+        languages.insert(
+            "cpp".to_string(),
+            LanguageConfig {
+                extensions: vec![
+                    "cpp".to_string(),
+                    "cc".to_string(),
+                    "cxx".to_string(),
+                    "hpp".to_string(),
+                    "hh".to_string(),
+                    "hxx".to_string(),
+                ],
+                grammar: "cpp".to_string(),
+                comment_prefix: Some("//".to_string()),
+                auto_indent: true,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+            },
+        );
+
         languages
     }
 
