@@ -1929,7 +1929,9 @@ editor.setStatus("Test diagnostics plugin loaded");
     // Get the diagnostics for our file
     // Note: On macOS, temp paths like /var/folders/... get canonicalized to /private/var/folders/...
     // so we need to canonicalize the path before constructing the URI
-    let canonical_path = test_file.canonicalize().unwrap_or_else(|_| test_file.clone());
+    let canonical_path = test_file
+        .canonicalize()
+        .unwrap_or_else(|_| test_file.clone());
     let file_uri = format!("file://{}", canonical_path.to_string_lossy());
     let diags = stored
         .get(&file_uri)
