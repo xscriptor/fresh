@@ -310,10 +310,6 @@
           "description": "Path to custom TextMate grammar file (optional)\nIf specified, this grammar will be used when highlighter is \"textmate\""
         }
       },
-      "required": [
-        "extensions",
-        "grammar"
-      ],
       "description": "Language-specific configuration"
     },
     "LspServerConfig": {
@@ -353,7 +349,6 @@
         }
       },
       "required": [
-        "args",
         "command"
       ],
       "description": "Configuration for a language server"

@@ -314,9 +314,11 @@ pub struct KeymapConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LanguageConfig {
     /// File extensions for this language
+    #[serde(default)]
     pub extensions: Vec<String>,
 
     /// Tree-sitter grammar name
+    #[serde(default)]
     pub grammar: String,
 
     /// Comment prefix
@@ -442,14 +444,51 @@ impl Config {
     }
 
     /// Load configuration from a JSON file
+    ///
+    /// This deserializes the user's config file and merges it with defaults.
+    /// For HashMap fields like `lsp` and `languages`, entries from the user config
+    /// are merged with (and override) the default entries. This allows users to
+    /// customize a single LSP server without losing the defaults for others.
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
         let contents = std::fs::read_to_string(path.as_ref())
             .map_err(|e| ConfigError::IoError(e.to_string()))?;
 
-        let config: Config =
+        let mut config: Config =
             serde_json::from_str(&contents).map_err(|e| ConfigError::ParseError(e.to_string()))?;
 
+        // Merge with defaults for HashMap fields
+        config.merge_defaults_for_maps();
+
         Ok(config)
+    }
+
+    /// Merge default values for HashMap fields that should combine user entries with defaults.
+    ///
+    /// This is called after deserializing user config to ensure that:
+    /// - Default LSP servers are present even if user only customizes one
+    /// - Default language configs are present even if user only customizes one
+    ///
+    /// User entries override defaults when keys collide.
+    fn merge_defaults_for_maps(&mut self) {
+        let defaults = Self::default();
+
+        // Merge LSP configs: start with defaults, overlay user entries
+        let user_lsp = std::mem::take(&mut self.lsp);
+        self.lsp = defaults.lsp;
+        for (key, value) in user_lsp {
+            self.lsp.insert(key, value);
+        }
+
+        // Merge language configs: start with defaults, overlay user entries
+        let user_languages = std::mem::take(&mut self.languages);
+        self.languages = defaults.languages;
+        for (key, value) in user_languages {
+            self.languages.insert(key, value);
+        }
+
+        // Note: keybinding_maps is NOT merged - user defines their own complete maps
+        // Note: keybindings Vec is NOT merged - it's user customizations only
+        // Note: menu is NOT merged - user can completely override the menu structure
     }
 
     /// Save configuration to a JSON file
@@ -1591,5 +1630,58 @@ mod tests {
         assert_eq!(config.keybindings.len(), 1);
         assert_eq!(config.keybindings[0].key, "x");
         assert_eq!(config.keybindings[0].modifiers.len(), 2);
+    }
+
+    #[test]
+    fn test_sparse_config_merges_with_defaults() {
+        // User config that only specifies one LSP server
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.json");
+
+        // Write a sparse config - only overriding rust LSP
+        let sparse_config = r#"{
+            "lsp": {
+                "rust": {
+                    "command": "custom-rust-analyzer",
+                    "args": ["--custom-arg"]
+                }
+            }
+        }"#;
+        std::fs::write(&config_path, sparse_config).unwrap();
+
+        // Load the config - should merge with defaults
+        let loaded = Config::load_from_file(&config_path).unwrap();
+
+        // User's rust override should be present
+        assert!(loaded.lsp.contains_key("rust"));
+        assert_eq!(loaded.lsp["rust"].command, "custom-rust-analyzer");
+
+        // Default LSP servers should also be present (merged from defaults)
+        assert!(loaded.lsp.contains_key("python"), "python LSP should be merged from defaults");
+        assert!(loaded.lsp.contains_key("typescript"), "typescript LSP should be merged from defaults");
+        assert!(loaded.lsp.contains_key("javascript"), "javascript LSP should be merged from defaults");
+
+        // Default language configs should also be present
+        assert!(loaded.languages.contains_key("rust"));
+        assert!(loaded.languages.contains_key("python"));
+        assert!(loaded.languages.contains_key("typescript"));
+    }
+
+    #[test]
+    fn test_empty_config_gets_all_defaults() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.json");
+
+        // Write an empty config
+        std::fs::write(&config_path, "{}").unwrap();
+
+        let loaded = Config::load_from_file(&config_path).unwrap();
+        let defaults = Config::default();
+
+        // Should have all default LSP servers
+        assert_eq!(loaded.lsp.len(), defaults.lsp.len());
+
+        // Should have all default languages
+        assert_eq!(loaded.languages.len(), defaults.languages.len());
     }
 }
