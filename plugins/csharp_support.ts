@@ -4,10 +4,12 @@
  * C# Language Server Support Plugin
  *
  * Handles LSP server requests from C# language servers like:
+ * - csharp-ls
  * - csharp-language-server (Roslyn-based)
  * - OmniSharp
  *
  * Features:
+ * - Auto-restore NuGet packages when opening C# files
  * - Auto-restore NuGet packages when the server requests it
  */
 
@@ -21,6 +23,14 @@ interface LspServerRequestData {
 interface ProjectNeedsRestoreParams {
   projectFilePath: string;
 }
+
+interface AfterFileOpenData {
+  path: string;
+  buffer_id: number;
+}
+
+// Track which directories we've already restored to avoid repeated restores
+const restoredDirectories = new Set<string>();
 
 /**
  * Run dotnet restore for a project
@@ -86,3 +96,43 @@ globalThis.on_csharp_lsp_server_request = function (
 
 // Register hook for LSP server requests
 editor.on("lsp_server_request", "on_csharp_lsp_server_request");
+
+/**
+ * Get the directory containing the file
+ */
+function getDirectory(filePath: string): string {
+  const lastSlash = filePath.lastIndexOf("/");
+  if (lastSlash === -1) {
+    return ".";
+  }
+  return filePath.substring(0, lastSlash);
+}
+
+/**
+ * Proactively run dotnet restore when opening a C# file
+ * This ensures the LSP server has access to restored packages from the start
+ */
+globalThis.on_csharp_file_open = async function (
+  data: AfterFileOpenData
+): Promise<void> {
+  // Only handle .cs files
+  if (!data.path.endsWith(".cs")) {
+    return;
+  }
+
+  const dir = getDirectory(data.path);
+
+  // Skip if we've already restored this directory
+  if (restoredDirectories.has(dir)) {
+    return;
+  }
+
+  // Mark as restored (even before we try, to avoid repeated attempts)
+  restoredDirectories.add(dir);
+
+  editor.debug(`csharp_support: C# file opened, running dotnet restore in ${dir}`);
+  await restoreProject(dir);
+};
+
+// Register hook for file open
+editor.on("after_file_open", "on_csharp_file_open");
