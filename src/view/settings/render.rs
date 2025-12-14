@@ -317,22 +317,6 @@ fn render_setting_item_pure(
         _ => false,
     };
 
-    // Controls that render their own label don't need the top-level name
-    let control_has_own_label = matches!(
-        &item.control,
-        SettingControl::Toggle(_)
-            | SettingControl::Number(_)
-            | SettingControl::TextList(_)
-            | SettingControl::Map(_)
-    );
-
-    // Calculate what to render based on skip_top
-    // For items with name line: row 0 = name, rows 1+ = control
-    // For items without: all rows are control
-    let name_line_height: u16 = if control_has_own_label { 0 } else { 1 };
-    let control_skip = skip_top.saturating_sub(name_line_height);
-    let show_name_line = !control_has_own_label && skip_top == 0;
-
     // Draw selection or hover highlight background (for visible portion)
     if is_selected || is_item_hovered {
         let bg_style = if is_selected {
@@ -346,58 +330,22 @@ fn render_setting_item_pure(
         }
     }
 
-    let mut render_y = area.y;
-
-    // Render name line if visible (not skipped)
-    if show_name_line {
-        let name_style = if is_selected {
-            Style::default().fg(theme.menu_highlight_fg)
-        } else if item.modified {
-            Style::default()
-                .fg(theme.diagnostic_warning_fg)
-                .add_modifier(Modifier::ITALIC)
-        } else {
-            Style::default().fg(theme.popup_text_fg)
-        };
-
-        let selection_prefix = if is_selected { "▶" } else { " " };
-        let modified_prefix = if item.modified { "●" } else { " " };
-        let name_line = Line::from(Span::styled(
-            format!("{}{} {}", selection_prefix, modified_prefix, item.name),
-            name_style,
-        ));
-        frame.render_widget(
-            Paragraph::new(name_line),
-            Rect::new(area.x, render_y, area.width, 1),
-        );
-        render_y += 1;
-    }
-
-    // Control area (indented for controls without own label)
-    let (control_x, control_width) = if control_has_own_label {
-        (area.x, area.width)
-    } else {
-        (area.x + 4, area.width.saturating_sub(4))
-    };
-
-    // Calculate available height for control
-    let available_control_height = (area.y + area.height).saturating_sub(render_y);
-    if available_control_height == 0 {
-        return ControlLayoutInfo::Complex;
-    }
-
-    let control_area = Rect::new(control_x, render_y, control_width, available_control_height);
-    render_control(frame, control_area, &item.control, control_skip, theme)
+    // All controls render their own label, so just render the control
+    render_control(frame, area, &item.control, &item.name, item.modified, skip_top, theme)
 }
 
 /// Render the appropriate control for a setting
 ///
 /// # Arguments
+/// * `name` - Setting name (for controls that render their own label)
+/// * `modified` - Whether the setting has been modified from default
 /// * `skip_rows` - Number of rows to skip at top of control (for partial visibility)
 fn render_control(
     frame: &mut Frame,
     area: Rect,
     control: &SettingControl,
+    name: &str,
+    modified: bool,
     skip_rows: u16,
     theme: &Theme,
 ) -> ControlLayoutInfo {
@@ -468,9 +416,15 @@ fn render_control(
             if skip_rows > 0 {
                 return ControlLayoutInfo::Complex;
             }
-            let style = Style::default().fg(theme.line_number_fg);
-            let text = format!("<{} - edit in config.toml>", type_name);
-            frame.render_widget(Paragraph::new(text).style(style), area);
+            // Render label with modified indicator
+            let label_style = Style::default().fg(theme.editor_fg);
+            let value_style = Style::default().fg(theme.line_number_fg);
+            let modified_indicator = if modified { "• " } else { "" };
+
+            let label = Span::styled(format!("{}{}: ", modified_indicator, name), label_style);
+            let value = Span::styled(format!("<{} - edit in config.toml>", type_name), value_style);
+
+            frame.render_widget(Paragraph::new(Line::from(vec![label, value])), area);
             ControlLayoutInfo::Complex
         }
     }

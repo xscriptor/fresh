@@ -73,29 +73,10 @@ impl SettingControl {
 }
 
 impl SettingItem {
-    /// Calculate the total height needed for this item (name line + control + spacing)
+    /// Calculate the total height needed for this item (control + spacing)
     pub fn item_height(&self) -> u16 {
-        // Controls that render their own label don't need extra name line
-        let name_height = match &self.control {
-            SettingControl::Toggle(_)
-            | SettingControl::Number(_)
-            | SettingControl::TextList(_)
-            | SettingControl::Map(_) => 0,
-            _ => 1,
-        };
-        // name line (if needed) + control height + 1 line spacing
-        name_height + self.control.control_height() + 1
-    }
-
-    /// Get the Y offset of the control within this item
-    fn control_y_offset(&self) -> u16 {
-        match &self.control {
-            SettingControl::Toggle(_)
-            | SettingControl::Number(_)
-            | SettingControl::TextList(_)
-            | SettingControl::Map(_) => 0,
-            _ => 1, // After name line
-        }
+        // All controls render their own label, so height is just control + spacing
+        self.control.control_height() + 1
     }
 }
 
@@ -105,8 +86,6 @@ impl ScrollItem for SettingItem {
     }
 
     fn focus_regions(&self) -> Vec<FocusRegion> {
-        let control_y = self.control_y_offset();
-
         match &self.control {
             // TextList: each row is a focus region
             SettingControl::TextList(state) => {
@@ -114,21 +93,21 @@ impl ScrollItem for SettingItem {
                 // Label row
                 regions.push(FocusRegion {
                     id: 0,
-                    y_offset: control_y,
+                    y_offset: 0,
                     height: 1,
                 });
                 // Each item row (id = 1 + row_index)
                 for i in 0..state.items.len() {
                     regions.push(FocusRegion {
                         id: 1 + i,
-                        y_offset: control_y + 1 + i as u16,
+                        y_offset: 1 + i as u16,
                         height: 1,
                     });
                 }
                 // Add-new row
                 regions.push(FocusRegion {
                     id: 1 + state.items.len(),
-                    y_offset: control_y + 1 + state.items.len() as u16,
+                    y_offset: 1 + state.items.len() as u16,
                     height: 1,
                 });
                 regions
@@ -136,7 +115,7 @@ impl ScrollItem for SettingItem {
             // Map: each entry row is a focus region
             SettingControl::Map(state) => {
                 let mut regions = Vec::new();
-                let mut y = control_y;
+                let mut y = 0u16;
 
                 // Label row
                 regions.push(FocusRegion {
