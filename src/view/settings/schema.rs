@@ -1,6 +1,56 @@
 //! JSON Schema parsing for settings UI
 //!
 //! Parses the config JSON Schema to build the settings UI structure.
+//!
+//! # Extensible Enums with `x-enum-values`
+//!
+//! This module supports a custom JSON Schema extension called `x-enum-values` that allows
+//! enum values to be defined separately from type definitions. This enables extensibility -
+//! new enum values can be added without modifying the type schema.
+//!
+//! ## How it works
+//!
+//! 1. Define a type in `$defs` (without hardcoded enum values):
+//!    ```json
+//!    "$defs": {
+//!      "ThemeOptions": {
+//!        "type": "string"
+//!      }
+//!    }
+//!    ```
+//!
+//! 2. Reference the type in properties:
+//!    ```json
+//!    "properties": {
+//!      "theme": {
+//!        "$ref": "#/$defs/ThemeOptions",
+//!        "default": "dark"
+//!      }
+//!    }
+//!    ```
+//!
+//! 3. Define enum values separately - each value declares which type it extends:
+//!    ```json
+//!    "x-enum-values": [
+//!      { "ref": "#/$defs/ThemeOptions", "name": "Dark", "value": "dark" },
+//!      { "ref": "#/$defs/ThemeOptions", "name": "Light", "value": "light" },
+//!      { "ref": "#/$defs/ThemeOptions", "name": "High Contrast", "value": "high-contrast" }
+//!    ]
+//!    ```
+//!
+//! ## Entry structure
+//!
+//! Each entry in `x-enum-values` has:
+//! - `ref` (required): JSON pointer to the type being extended (e.g., `#/$defs/ThemeOptions`)
+//! - `value` (required): The actual value, must match the referenced type
+//! - `name` (optional): Human-friendly display name, defaults to `value` if not provided
+//!
+//! ## Benefits
+//!
+//! - **Extensibility**: Add new values without changing the schema structure
+//! - **Self-describing**: Values declare which type they belong to
+//! - **Plugin-friendly**: External sources can contribute enum values
+//! - **Type-safe**: Values are validated against their referenced type
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -31,8 +81,8 @@ pub enum SettingType {
     Number { minimum: Option<f64>, maximum: Option<f64> },
     /// Free-form string
     String,
-    /// String with enumerated options
-    Enum { options: Vec<String> },
+    /// String with enumerated options (display name, value)
+    Enum { options: Vec<EnumOption> },
     /// Array of strings
     StringArray,
     /// Nested object (category)
@@ -41,6 +91,15 @@ pub enum SettingType {
     Map { value_schema: Box<SettingSchema> },
     /// Complex type we can't edit directly
     Complex,
+}
+
+/// An option in an enum type
+#[derive(Debug, Clone)]
+pub struct EnumOption {
+    /// Display name shown in UI
+    pub name: String,
+    /// Actual value stored in config
+    pub value: String,
 }
 
 /// A category in the settings tree
@@ -77,6 +136,21 @@ struct RawSchema {
     defs: Option<HashMap<String, RawSchema>>,
     #[serde(rename = "additionalProperties")]
     additional_properties: Option<AdditionalProperties>,
+    /// Extensible enum values - see module docs for details
+    #[serde(rename = "x-enum-values", default)]
+    extensible_enum_values: Vec<EnumValueEntry>,
+}
+
+/// An entry in the x-enum-values array
+#[derive(Debug, Deserialize)]
+struct EnumValueEntry {
+    /// JSON pointer to the type being extended (e.g., "#/$defs/ThemeOptions")
+    #[serde(rename = "ref")]
+    ref_path: String,
+    /// Human-friendly display name (optional, defaults to value)
+    name: Option<String>,
+    /// The actual value (must match the referenced type)
+    value: serde_json::Value,
 }
 
 /// additionalProperties can be a boolean or a schema object
@@ -105,12 +179,18 @@ impl SchemaType {
     }
 }
 
+/// Map from $ref paths to their enum options
+type EnumValuesMap = HashMap<String, Vec<EnumOption>>;
+
 /// Parse the JSON Schema and build the category tree
 pub fn parse_schema(schema_json: &str) -> Result<Vec<SettingCategory>, serde_json::Error> {
     let raw: RawSchema = serde_json::from_str(schema_json)?;
 
     let defs = raw.defs.unwrap_or_default();
     let properties = raw.properties.unwrap_or_default();
+
+    // Build enum values map from x-enum-values entries
+    let enum_values_map = build_enum_values_map(&raw.extensible_enum_values);
 
     let mut categories = Vec::new();
     let mut top_level_settings = Vec::new();
@@ -126,7 +206,7 @@ pub fn parse_schema(schema_json: &str) -> Result<Vec<SettingCategory>, serde_jso
         // Check if this is a nested object (category) or a simple setting
         if let Some(ref inner_props) = resolved.properties {
             // This is a category with nested settings
-            let settings = parse_properties(inner_props, &path, &defs);
+            let settings = parse_properties(inner_props, &path, &defs, &enum_values_map);
             categories.push(SettingCategory {
                 name: display_name,
                 path: path.clone(),
@@ -136,7 +216,7 @@ pub fn parse_schema(schema_json: &str) -> Result<Vec<SettingCategory>, serde_jso
             });
         } else {
             // This is a top-level setting
-            let setting = parse_setting(&name, &path, &resolved, &defs);
+            let setting = parse_setting(&name, &path, &prop, &defs, &enum_values_map);
             top_level_settings.push(setting);
         }
     }
@@ -164,18 +244,41 @@ pub fn parse_schema(schema_json: &str) -> Result<Vec<SettingCategory>, serde_jso
     Ok(categories)
 }
 
+/// Build a map from $ref paths to their enum options
+fn build_enum_values_map(entries: &[EnumValueEntry]) -> EnumValuesMap {
+    let mut map: EnumValuesMap = HashMap::new();
+
+    for entry in entries {
+        let value_str = match &entry.value {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+
+        let option = EnumOption {
+            name: entry.name.clone().unwrap_or_else(|| value_str.clone()),
+            value: value_str,
+        };
+
+        map.entry(entry.ref_path.clone())
+            .or_default()
+            .push(option);
+    }
+
+    map
+}
+
 /// Parse properties into settings
 fn parse_properties(
     properties: &HashMap<String, RawSchema>,
     parent_path: &str,
     defs: &HashMap<String, RawSchema>,
+    enum_values_map: &EnumValuesMap,
 ) -> Vec<SettingSchema> {
     let mut settings = Vec::new();
 
     for (name, prop) in properties {
         let path = format!("{}/{}", parent_path, name);
-        let resolved = resolve_ref(prop, defs);
-        let setting = parse_setting(name, &path, &resolved, defs);
+        let setting = parse_setting(name, &path, prop, defs, enum_values_map);
         settings.push(setting);
     }
 
@@ -191,25 +294,54 @@ fn parse_setting(
     path: &str,
     schema: &RawSchema,
     defs: &HashMap<String, RawSchema>,
+    enum_values_map: &EnumValuesMap,
 ) -> SettingSchema {
-    let setting_type = determine_type(schema, defs);
+    let setting_type = determine_type(schema, defs, enum_values_map);
+
+    // Get description from resolved ref if not present on schema
+    let resolved = resolve_ref(schema, defs);
+    let description = schema.description.clone().or_else(|| resolved.description.clone());
 
     SettingSchema {
         path: path.to_string(),
         name: humanize_name(name),
-        description: schema.description.clone(),
+        description,
         setting_type,
         default: schema.default.clone(),
     }
 }
 
 /// Determine the SettingType from a schema
-fn determine_type(schema: &RawSchema, defs: &HashMap<String, RawSchema>) -> SettingType {
-    // Check for enum first
-    if let Some(ref values) = schema.enum_values {
-        let options: Vec<String> = values
+fn determine_type(
+    schema: &RawSchema,
+    defs: &HashMap<String, RawSchema>,
+    enum_values_map: &EnumValuesMap,
+) -> SettingType {
+    // Check for extensible enum values via $ref
+    if let Some(ref ref_path) = schema.ref_path {
+        if let Some(options) = enum_values_map.get(ref_path) {
+            if !options.is_empty() {
+                return SettingType::Enum {
+                    options: options.clone(),
+                };
+            }
+        }
+    }
+
+    // Resolve ref for type checking
+    let resolved = resolve_ref(schema, defs);
+
+    // Check for inline enum values (on original schema or resolved ref)
+    let enum_values = schema.enum_values.as_ref().or(resolved.enum_values.as_ref());
+    if let Some(values) = enum_values {
+        let options: Vec<EnumOption> = values
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
+            .filter_map(|v| {
+                v.as_str().map(|s| EnumOption {
+                    name: s.to_string(),
+                    value: s.to_string(),
+                })
+            })
             .collect();
         if !options.is_empty() {
             return SettingType::Enum { options };
@@ -217,24 +349,24 @@ fn determine_type(schema: &RawSchema, defs: &HashMap<String, RawSchema>) -> Sett
     }
 
     // Check type field
-    match schema.schema_type.as_ref().and_then(|t| t.primary()) {
+    match resolved.schema_type.as_ref().and_then(|t| t.primary()) {
         Some("boolean") => SettingType::Boolean,
         Some("integer") => {
-            let minimum = schema.minimum.as_ref().and_then(|n| n.as_i64());
-            let maximum = schema.maximum.as_ref().and_then(|n| n.as_i64());
+            let minimum = resolved.minimum.as_ref().and_then(|n| n.as_i64());
+            let maximum = resolved.maximum.as_ref().and_then(|n| n.as_i64());
             SettingType::Integer { minimum, maximum }
         }
         Some("number") => {
-            let minimum = schema.minimum.as_ref().and_then(|n| n.as_f64());
-            let maximum = schema.maximum.as_ref().and_then(|n| n.as_f64());
+            let minimum = resolved.minimum.as_ref().and_then(|n| n.as_f64());
+            let maximum = resolved.maximum.as_ref().and_then(|n| n.as_f64());
             SettingType::Number { minimum, maximum }
         }
         Some("string") => SettingType::String,
         Some("array") => {
             // Check if it's an array of strings
-            if let Some(ref items) = schema.items {
-                let resolved = resolve_ref(items, defs);
-                if resolved.schema_type.as_ref().and_then(|t| t.primary()) == Some("string") {
+            if let Some(ref items) = resolved.items {
+                let item_resolved = resolve_ref(items, defs);
+                if item_resolved.schema_type.as_ref().and_then(|t| t.primary()) == Some("string") {
                     return SettingType::StringArray;
                 }
             }
@@ -242,11 +374,12 @@ fn determine_type(schema: &RawSchema, defs: &HashMap<String, RawSchema>) -> Sett
         }
         Some("object") => {
             // Check for additionalProperties (map type)
-            if let Some(ref add_props) = schema.additional_properties {
+            if let Some(ref add_props) = resolved.additional_properties {
                 match add_props {
                     AdditionalProperties::Schema(schema_box) => {
-                        let resolved = resolve_ref(schema_box, defs);
-                        let value_schema = parse_setting("value", "", resolved, defs);
+                        let inner_resolved = resolve_ref(schema_box, defs);
+                        let value_schema =
+                            parse_setting("value", "", inner_resolved, defs, enum_values_map);
                         return SettingType::Map {
                             value_schema: Box::new(value_schema),
                         };
@@ -262,8 +395,8 @@ fn determine_type(schema: &RawSchema, defs: &HashMap<String, RawSchema>) -> Sett
                 }
             }
             // Regular object with fixed properties
-            if let Some(ref props) = schema.properties {
-                let properties = parse_properties(props, "", defs);
+            if let Some(ref props) = resolved.properties {
+                let properties = parse_properties(props, "", defs, enum_values_map);
                 return SettingType::Object { properties };
             }
             SettingType::Complex

@@ -5,8 +5,8 @@
   "type": "object",
   "properties": {
     "theme": {
-      "description": "Color theme name (e.g., \"high-contrast\", \"monokai\", \"solarized-dark\")",
-      "type": "string",
+      "description": "Color theme name",
+      "$ref": "#/$defs/ThemeOptions",
       "default": "high-contrast"
     },
     "check_for_updates": {
@@ -753,6 +753,11 @@
     }
   },
   "$defs": {
+    "ThemeOptions": {
+      "description": "Available color themes",
+      "type": "string",
+      "enum": ["dark", "light", "high-contrast", "nostalgia"]
+    },
     "EditorConfig": {
       "description": "Editor behavior configuration",
       "type": "object",

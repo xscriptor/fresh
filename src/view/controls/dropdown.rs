@@ -15,8 +15,11 @@ use super::FocusState;
 pub struct DropdownState {
     /// Currently selected index
     pub selected: usize,
-    /// Available options
+    /// Display names for options (shown in UI)
     pub options: Vec<String>,
+    /// Actual values for options (stored in config)
+    /// If empty, options are used as values
+    pub values: Vec<String>,
     /// Label displayed before the dropdown
     pub label: String,
     /// Whether the dropdown is currently open
@@ -26,11 +29,29 @@ pub struct DropdownState {
 }
 
 impl DropdownState {
-    /// Create a new dropdown state
+    /// Create a new dropdown state where display names equal values
     pub fn new(options: Vec<String>, label: impl Into<String>) -> Self {
         Self {
             selected: 0,
             options,
+            values: Vec::new(), // Empty means use options as values
+            label: label.into(),
+            open: false,
+            focus: FocusState::Normal,
+        }
+    }
+
+    /// Create a dropdown with separate display names and values
+    pub fn with_values(
+        options: Vec<String>,
+        values: Vec<String>,
+        label: impl Into<String>,
+    ) -> Self {
+        debug_assert_eq!(options.len(), values.len());
+        Self {
+            selected: 0,
+            options,
+            values,
             label: label.into(),
             open: false,
             focus: FocusState::Normal,
@@ -51,9 +72,27 @@ impl DropdownState {
         self
     }
 
-    /// Get the currently selected option
+    /// Get the currently selected value (for storing in config)
+    pub fn selected_value(&self) -> Option<&str> {
+        if self.values.is_empty() {
+            self.options.get(self.selected).map(|s| s.as_str())
+        } else {
+            self.values.get(self.selected).map(|s| s.as_str())
+        }
+    }
+
+    /// Get the currently selected display name (for UI)
     pub fn selected_option(&self) -> Option<&str> {
         self.options.get(self.selected).map(|s| s.as_str())
+    }
+
+    /// Find the index of a value
+    pub fn index_of_value(&self, value: &str) -> Option<usize> {
+        if self.values.is_empty() {
+            self.options.iter().position(|o| o == value)
+        } else {
+            self.values.iter().position(|v| v == value)
+        }
     }
 
     /// Toggle the dropdown open/closed

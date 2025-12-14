@@ -151,8 +151,11 @@ fn build_item(schema: &SettingSchema, config_value: &serde_json::Value) -> Setti
                 .or_else(|| schema.default.as_ref().and_then(|d| d.as_str()))
                 .unwrap_or("");
 
-            let selected = options.iter().position(|o| o == current).unwrap_or(0);
-            let state = DropdownState::new(options.clone(), &schema.name).with_selected(selected);
+            let display_names: Vec<String> = options.iter().map(|o| o.name.clone()).collect();
+            let values: Vec<String> = options.iter().map(|o| o.value.clone()).collect();
+            let selected = values.iter().position(|v| v == current).unwrap_or(0);
+            let state =
+                DropdownState::with_values(display_names, values, &schema.name).with_selected(selected);
             SettingControl::Dropdown(state)
         }
 
@@ -221,7 +224,7 @@ pub fn control_to_value(control: &SettingControl) -> serde_json::Value {
 
         SettingControl::Dropdown(state) => {
             state
-                .selected_option()
+                .selected_value()
                 .map(|s| serde_json::Value::String(s.to_string()))
                 .unwrap_or(serde_json::Value::Null)
         }

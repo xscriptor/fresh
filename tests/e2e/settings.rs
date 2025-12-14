@@ -722,3 +722,84 @@ fn test_settings_search_jump_scrolls() {
     // Close settings
     harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
 }
+
+/// Test theme dropdown can be cycled with Enter or Right arrow
+/// BUG: Theme dropdown doesn't cycle - it stays on the same value
+#[test]
+#[ignore] // TODO: Fix theme dropdown cycling - currently broken
+fn test_settings_theme_dropdown_cycle() {
+    let mut harness = EditorTestHarness::new(100, 40).unwrap();
+
+    // Open settings
+    harness
+        .send_key(KeyCode::Char(','), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Search for theme setting
+    harness
+        .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
+        .unwrap();
+    for c in "theme".chars() {
+        harness
+            .send_key(KeyCode::Char(c), KeyModifiers::NONE)
+            .unwrap();
+    }
+    harness.render().unwrap();
+
+    // Jump to theme setting
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Should be on Theme setting with current value (high-contrast is default)
+    harness.assert_screen_contains("Theme");
+    let initial_screen = harness.screen_to_string();
+    let has_high_contrast = initial_screen.contains("high-contrast");
+
+    // Press Enter to cycle to next theme option
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // The theme should have changed - this is currently broken
+    // Expected: theme changes to next option (e.g., monokai, solarized-dark)
+    // Actual: theme stays on high-contrast
+    let after_enter = harness.screen_to_string();
+
+    if has_high_contrast {
+        // After pressing Enter, it should cycle to a different theme
+        // This assertion will fail with the current bug
+        assert!(
+            !after_enter.contains("high-contrast") || after_enter.contains("modified"),
+            "Theme should change after pressing Enter, but it stayed the same"
+        );
+    }
+
+    // Try Right arrow as well
+    harness
+        .send_key(KeyCode::Right, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    let after_right = harness.screen_to_string();
+
+    // Should show modified indicator if theme changed
+    // This will also fail with the current bug
+    assert!(
+        after_right.contains("modified"),
+        "Theme dropdown should cycle with Right arrow and show modified indicator"
+    );
+
+    // Discard and close
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+    harness.render().unwrap();
+    harness
+        .send_key(KeyCode::Right, KeyModifiers::NONE)
+        .unwrap();
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+}
