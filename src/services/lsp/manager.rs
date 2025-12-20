@@ -8,7 +8,7 @@
 
 use crate::services::async_bridge::AsyncBridge;
 use crate::services::lsp::async_handler::LspHandle;
-use crate::services::lsp::client::LspServerConfig;
+use crate::types::LspServerConfig;
 use lsp_types::Uri;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};

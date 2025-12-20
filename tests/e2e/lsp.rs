@@ -778,7 +778,7 @@ fn test_lsp_waiting_indicator() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::script_path().to_string_lossy().to_string(),
             args: vec![],
             enabled: true,
@@ -952,7 +952,7 @@ fn test_lsp_completion_canceled_on_cursor_move() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::script_path().to_string_lossy().to_string(),
             args: vec![],
             enabled: true,
@@ -1017,7 +1017,7 @@ fn test_lsp_cursor_animation() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::script_path().to_string_lossy().to_string(),
             args: vec![],
             enabled: true,
@@ -1083,7 +1083,7 @@ fn test_lsp_completion_canceled_on_text_edit() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::script_path().to_string_lossy().to_string(),
             args: vec![],
             enabled: true,
@@ -1665,7 +1665,7 @@ fn test_lsp_diagnostics_non_blocking() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::blocking_script_path()
                 .to_string_lossy()
                 .to_string(),
@@ -1821,7 +1821,7 @@ fn test_rust_analyzer_rename_real_scenario() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: "rust-analyzer".to_string(),
             args: vec![
                 "--log-file".to_string(),
@@ -2430,7 +2430,7 @@ fn test_lsp_progress_status_display() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::progress_script_path()
                 .to_string_lossy()
                 .to_string(),
@@ -2590,7 +2590,7 @@ fn test_lsp_crash_detection_and_restart() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::crashing_script_path()
                 .to_string_lossy()
                 .to_string(),
@@ -2886,7 +2886,7 @@ fn test_pull_diagnostics_auto_trigger_after_open() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::pull_diagnostics_script_path()
                 .to_string_lossy()
                 .to_string(),
@@ -2964,7 +2964,7 @@ fn test_pull_diagnostics_result_id_tracking() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::pull_diagnostics_script_path()
                 .to_string_lossy()
                 .to_string(),
@@ -3223,7 +3223,7 @@ fn test_stopped_lsp_does_not_auto_restart_on_edit() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::script_path().to_string_lossy().to_string(),
             args: vec![],
             enabled: true,
@@ -3547,7 +3547,7 @@ fn test_hover_popup_persists_within_symbol_and_popup() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::script_path().to_string_lossy().to_string(),
             args: vec![],
             enabled: true,

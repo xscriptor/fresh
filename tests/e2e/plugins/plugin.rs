@@ -6,7 +6,7 @@ use crate::common::harness::EditorTestHarness;
 use crate::common::tracing::init_tracing_from_env;
 use crossterm::event::{KeyCode, KeyModifiers};
 use fresh::config::Config;
-use fresh::services::lsp::client::LspServerConfig;
+use fresh::services::lsp::LspServerConfig;
 use fresh::services::process_limits::ProcessLimits;
 use std::fs;
 use std::time::Duration;
@@ -681,7 +681,7 @@ fn test_diagnostics_panel_plugin_loads() {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::many_diagnostics_script_path()
                 .to_string_lossy()
                 .to_string(),

@@ -28,7 +28,7 @@ fn test_did_open_sent_before_hover() -> std::io::Result<()> {
     let mut config = fresh::config::Config::default();
     config.lsp.insert(
         "rust".to_string(),
-        fresh::services::lsp::client::LspServerConfig {
+        fresh::services::lsp::LspServerConfig {
             command: FakeLspServer::logging_script_path()
                 .to_string_lossy()
                 .to_string(),

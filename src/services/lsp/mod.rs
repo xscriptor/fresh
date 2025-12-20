@@ -74,9 +74,6 @@
 //!   channels. `LspTask` runs in a separate tokio task, managing the server
 //!   subprocess and JSON-RPC I/O. Each handle has a unique `id` for tracking.
 //!
-//! - **`client`**: Legacy sync client (kept for reference). Re-exports
-//!   [`LspServerConfig`] for server configuration.
-//!
 //! - **`diagnostics`**: Converts LSP diagnostics to editor overlays (colored
 //!   underlines for errors, warnings, etc.).
 //!
@@ -118,6 +115,8 @@
 //!   (e.g., pull diagnostics only if `diagnosticProvider` is advertised)
 
 pub mod async_handler;
-pub mod client;
 pub mod diagnostics;
 pub mod manager;
+
+// Re-export for public API (used by tests)
+pub use crate::types::LspServerConfig;
