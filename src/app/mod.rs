@@ -3635,6 +3635,112 @@ impl Editor {
         }
     }
 
+    /// Copy the current selection to clipboard as a styled image with syntax highlighting
+    pub fn copy_selection_as_image(&mut self) {
+        use crate::services::styled_image::{render_styled_text, StyledImageConfig};
+
+        // Collect ranges and their byte offsets
+        let ranges: Vec<_> = {
+            let state = self.active_state();
+            state
+                .cursors
+                .iter()
+                .filter_map(|(_, cursor)| cursor.selection_range())
+                .collect()
+        };
+
+        if ranges.is_empty() {
+            self.status_message = Some("No selection to copy".to_string());
+            return;
+        }
+
+        // Get the overall range for highlighting
+        let min_offset = ranges.iter().map(|r| r.start).min().unwrap_or(0);
+        let max_offset = ranges.iter().map(|r| r.end).max().unwrap_or(0);
+
+        // Clone the theme to avoid borrow conflicts
+        let theme = self.theme.clone();
+
+        // Collect text and highlight spans from state
+        let (text, highlight_spans) = {
+            let state = self.active_state_mut();
+
+            // Collect text from all ranges
+            let mut text = String::new();
+            for range in &ranges {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                let range_text = state.get_text_range(range.start, range.end);
+                text.push_str(&range_text);
+            }
+
+            if text.is_empty() {
+                (text, Vec::new())
+            } else {
+                // Get highlight spans for the selected region
+                let highlight_spans = state.highlighter.highlight_viewport(
+                    &state.buffer,
+                    min_offset,
+                    max_offset,
+                    &theme,
+                    0, // No context needed since we're copying exact selection
+                );
+                (text, highlight_spans)
+            }
+        };
+
+        if text.is_empty() {
+            self.status_message = Some("No text to copy".to_string());
+            return;
+        }
+
+        // Adjust highlight spans to be relative to the copied text
+        // For single contiguous selection, we need to shift byte offsets
+        let adjusted_spans: Vec<_> = if ranges.len() == 1 {
+            let base_offset = ranges[0].start;
+            highlight_spans
+                .into_iter()
+                .filter_map(|span| {
+                    // Only include spans that overlap with our selection
+                    if span.range.end <= base_offset || span.range.start >= ranges[0].end {
+                        return None;
+                    }
+                    let start = span.range.start.saturating_sub(base_offset);
+                    let end = (span.range.end - base_offset).min(text.len());
+                    if start < end {
+                        Some(crate::primitives::highlighter::HighlightSpan {
+                            range: start..end,
+                            color: span.color,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            // For multi-cursor selection, highlighting becomes more complex
+            // For now, just use empty spans (no highlighting)
+            Vec::new()
+        };
+
+        // Render the styled text to an image
+        let config = StyledImageConfig::default();
+        let result = render_styled_text(&text, &adjusted_spans, &theme, &config);
+
+        // Copy the image to clipboard
+        if self
+            .clipboard
+            .copy_image(result.width, result.height, result.rgba_bytes)
+        {
+            self.status_message = Some("Copied as image".to_string());
+        } else {
+            // Fall back to text copy
+            self.clipboard.copy(text);
+            self.status_message = Some("Image copy failed, copied as text".to_string());
+        }
+    }
+
     /// Cut the current selection to clipboard
     pub fn cut_selection(&mut self) {
         self.copy_selection();

@@ -248,6 +248,7 @@ impl Editor {
                 self.toggle_auto_revert();
             }
             Action::Copy => self.copy_selection(),
+            Action::CopyAsImage => self.copy_selection_as_image(),
             Action::Cut => {
                 if self.is_editing_disabled() {
                     self.set_status_message("Editing disabled in this buffer".to_string());

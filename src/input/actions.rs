@@ -1750,6 +1750,7 @@ pub fn action_to_events(
         | Action::NextSplit
         | Action::PrevSplit
         | Action::Copy
+        | Action::CopyAsImage
         | Action::Cut
         | Action::Paste
         | Action::AddCursorNextMatch
