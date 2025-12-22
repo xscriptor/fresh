@@ -1306,14 +1306,14 @@ impl Config {
                         label: "Cut".to_string(),
                         action: "cut".to_string(),
                         args: HashMap::new(),
-                        when: None,
+                        when: Some(context_keys::HAS_SELECTION.to_string()),
                         checkbox: None,
                     },
                     MenuItem::Action {
                         label: "Copy".to_string(),
                         action: "copy".to_string(),
                         args: HashMap::new(),
-                        when: None,
+                        when: Some(context_keys::HAS_SELECTION.to_string()),
                         checkbox: None,
                     },
                     MenuItem::DynamicSubmenu {

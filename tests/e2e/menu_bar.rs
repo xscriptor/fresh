@@ -498,3 +498,83 @@ fn test_copy_with_formatting_submenu_shows_themes() {
         screen
     );
 }
+
+/// Test that pressing Enter on a "Copy with Formatting" submenu option activates the copy action
+#[test]
+fn test_copy_with_formatting_submenu_activates_on_enter() {
+    let mut harness = EditorTestHarness::new(100, 30).unwrap();
+    harness.render().unwrap();
+
+    // First, insert some text and select it so the copy action can work
+    harness.type_text("Hello World").unwrap();
+    // Select all text with Ctrl+A
+    harness
+        .send_key(KeyCode::Char('a'), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Verify text is selected (status bar should show selection)
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("Hello World"),
+        "Text should be visible in the editor"
+    );
+
+    // Open Edit menu
+    harness
+        .send_key(KeyCode::Char('e'), KeyModifiers::ALT)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Navigate down to "Copy with Formatting" submenu
+    // Edit menu items: Undo(0), Redo(1), [separator], Cut, Copy, Copy with Formatting, ...
+    // Down 1: Undo -> Redo
+    harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+    // Down 2: Redo -> Cut (skips separator)
+    harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+    // Down 3: Cut -> Copy
+    harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+    // Down 4: Copy -> Copy with Formatting
+    harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+    harness.render().unwrap();
+
+    // Open the submenu with Enter key
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Verify submenu is open with theme options
+    let screen_with_submenu = harness.screen_to_string();
+    assert!(
+        screen_with_submenu.contains("dark"),
+        "Submenu should show 'dark' theme option. Screen:\n{}",
+        screen_with_submenu
+    );
+
+    // Navigate right into the submenu to select the first theme option
+    harness
+        .send_key(KeyCode::Right, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Press Enter on the first theme option ("dark") to activate copy with formatting
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // After activating the action, the menu should close
+    let screen_after = harness.screen_to_string();
+    assert!(
+        !screen_after.contains("Copy with Formatting"),
+        "Menu should close after activating copy action. Screen:\n{}",
+        screen_after
+    );
+    // The editor content should still be visible
+    assert!(
+        screen_after.contains("Hello World"),
+        "Editor content should still be visible after copy. Screen:\n{}",
+        screen_after
+    );
+}
