@@ -985,18 +985,60 @@ fn render_text_list_partial(
 
     // Add-new row
     if y < area.y + area.height && content_row >= skip_rows {
-        let add_line = Line::from(vec![
-            Span::raw(" ".repeat(indent as usize)),
-            Span::styled("[+] Add new", Style::default().fg(colors.add_button)),
-        ]);
-        let row_area = Rect::new(area.x, y, area.width, 1);
-        frame.render_widget(Paragraph::new(add_line), row_area);
+        // Check if we're focused on the add-new input (focused_item is None and focused)
+        let is_add_focused = state.focused_item.is_none() && state.focus == FocusState::Focused;
 
-        rows.push(TextListRowLayout {
-            text_area: Rect::new(area.x + indent, y, 11, 1), // "[+] Add new"
-            button_area: Rect::new(area.x + indent, y, 11, 1),
-            index: None,
-        });
+        if is_add_focused {
+            // Show input field with new_item_text
+            let inner_width = actual_field_width.saturating_sub(2) as usize;
+            let visible: String = state.new_item_text.chars().take(inner_width).collect();
+            let padded = format!("{:width$}", visible, width = inner_width);
+
+            let line = Line::from(vec![
+                Span::raw(" ".repeat(indent as usize)),
+                Span::styled("[", Style::default().fg(colors.focused)),
+                Span::styled(padded, Style::default().fg(colors.text)),
+                Span::styled("]", Style::default().fg(colors.focused)),
+                Span::raw(" "),
+                Span::styled("[+]", Style::default().fg(colors.add_button)),
+            ]);
+            let row_area = Rect::new(area.x, y, area.width, 1);
+            frame.render_widget(Paragraph::new(line), row_area);
+
+            // Render cursor
+            if state.cursor <= inner_width {
+                let cursor_x = area.x + indent + 1 + state.cursor as u16;
+                let cursor_char = state.new_item_text.chars().nth(state.cursor).unwrap_or(' ');
+                let cursor_area = Rect::new(cursor_x, y, 1, 1);
+                let cursor_span = Span::styled(
+                    cursor_char.to_string(),
+                    Style::default()
+                        .fg(colors.focused)
+                        .add_modifier(ratatui::style::Modifier::REVERSED),
+                );
+                frame.render_widget(Paragraph::new(Line::from(vec![cursor_span])), cursor_area);
+            }
+
+            rows.push(TextListRowLayout {
+                text_area: Rect::new(area.x + indent, y, actual_field_width, 1),
+                button_area: Rect::new(area.x + indent + actual_field_width + 1, y, 3, 1),
+                index: None,
+            });
+        } else {
+            // Show static "[+] Add new" label
+            let add_line = Line::from(vec![
+                Span::raw(" ".repeat(indent as usize)),
+                Span::styled("[+] Add new", Style::default().fg(colors.add_button)),
+            ]);
+            let row_area = Rect::new(area.x, y, area.width, 1);
+            frame.render_widget(Paragraph::new(add_line), row_area);
+
+            rows.push(TextListRowLayout {
+                text_area: Rect::new(area.x + indent, y, 11, 1), // "[+] Add new"
+                button_area: Rect::new(area.x + indent, y, 11, 1),
+                index: None,
+            });
+        }
     }
 
     TextListLayout {
