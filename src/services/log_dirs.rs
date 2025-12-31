@@ -248,7 +248,9 @@ fn is_process_running(pid: u32) -> bool {
         // On Windows, try to open the process
         use std::os::windows::io::FromRawHandle;
         use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
 
         unsafe {
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
@@ -292,16 +294,51 @@ pub fn print_all_paths() {
     writeln!(handle).ok();
 
     writeln!(handle, "Config:     {}", config_dir.display()).ok();
-    writeln!(handle, "  config.json:  {}", config_dir.join("config.json").display()).ok();
-    writeln!(handle, "  themes/:      {}", config_dir.join("themes").display()).ok();
-    writeln!(handle, "  grammars/:    {}", config_dir.join("grammars").display()).ok();
-    writeln!(handle, "  plugins/:     {}", config_dir.join("plugins").display()).ok();
+    writeln!(
+        handle,
+        "  config.json:  {}",
+        config_dir.join("config.json").display()
+    )
+    .ok();
+    writeln!(
+        handle,
+        "  themes/:      {}",
+        config_dir.join("themes").display()
+    )
+    .ok();
+    writeln!(
+        handle,
+        "  grammars/:    {}",
+        config_dir.join("grammars").display()
+    )
+    .ok();
+    writeln!(
+        handle,
+        "  plugins/:     {}",
+        config_dir.join("plugins").display()
+    )
+    .ok();
     writeln!(handle).ok();
 
     writeln!(handle, "Data:       {}", data_dir.display()).ok();
-    writeln!(handle, "  sessions/:    {}", data_dir.join("sessions").display()).ok();
-    writeln!(handle, "  recovery/:    {}", data_dir.join("recovery").display()).ok();
-    writeln!(handle, "  terminals/:   {}", data_dir.join("terminals").display()).ok();
+    writeln!(
+        handle,
+        "  sessions/:    {}",
+        data_dir.join("sessions").display()
+    )
+    .ok();
+    writeln!(
+        handle,
+        "  recovery/:    {}",
+        data_dir.join("recovery").display()
+    )
+    .ok();
+    writeln!(
+        handle,
+        "  terminals/:   {}",
+        data_dir.join("terminals").display()
+    )
+    .ok();
     writeln!(handle).ok();
 
     writeln!(handle, "Logs:       {}", logs_dir.display()).ok();
@@ -344,7 +381,10 @@ mod tests {
         let name = path.file_name().unwrap().to_string_lossy();
         assert!(name.starts_with("rust-"), "Should start with language-");
         assert!(name.ends_with(".log"), "Should end with .log");
-        assert!(path.to_string_lossy().contains("lsp"), "Should be in lsp dir");
+        assert!(
+            path.to_string_lossy().contains("lsp"),
+            "Should be in lsp dir"
+        );
     }
 
     #[test]
