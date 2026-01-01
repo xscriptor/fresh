@@ -95,6 +95,8 @@ pub enum DeferredAction {
     CloseSettings {
         save: bool,
     },
+    /// Paste text from clipboard into the active settings input
+    PasteToSettings,
     /// Open the config file for the specified layer in the editor
     OpenConfigFile {
         layer: crate::config_io::ConfigLayer,

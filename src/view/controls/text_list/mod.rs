@@ -81,6 +81,26 @@ impl TextListState {
         self.cursor = 0;
     }
 
+    /// Insert a string at the cursor position
+    pub fn insert_str(&mut self, s: &str) {
+        if !self.is_enabled() {
+            return;
+        }
+        if let Some(index) = self.focused_item {
+            if let Some(item) = self.items.get_mut(index) {
+                if self.cursor <= item.len() {
+                    item.insert_str(self.cursor, s);
+                    self.cursor += s.len();
+                }
+            }
+        } else {
+            if self.cursor <= self.new_item_text.len() {
+                self.new_item_text.insert_str(self.cursor, s);
+                self.cursor += s.len();
+            }
+        }
+    }
+
     /// Remove an item by index
     pub fn remove_item(&mut self, index: usize) {
         if !self.is_enabled() || index >= self.items.len() {

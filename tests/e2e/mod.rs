@@ -51,6 +51,7 @@ pub mod search;
 pub mod selection;
 pub mod session;
 pub mod settings;
+pub mod settings_paste;
 pub mod shell_command;
 pub mod slow_filesystem;
 pub mod smart_editing;

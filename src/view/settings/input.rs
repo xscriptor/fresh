@@ -76,7 +76,7 @@ impl SettingsState {
     fn handle_entry_dialog_input(
         &mut self,
         event: &KeyEvent,
-        _ctx: &mut InputContext,
+        ctx: &mut InputContext,
     ) -> InputResult {
         // Check if we're in a special editing mode
         let (editing_text, dropdown_open) = if let Some(dialog) = self.entry_dialog() {
@@ -91,7 +91,7 @@ impl SettingsState {
 
         // Route to appropriate handler based on mode
         if editing_text {
-            self.handle_entry_dialog_text_editing(event)
+            self.handle_entry_dialog_text_editing(event, ctx)
         } else if dropdown_open {
             self.handle_entry_dialog_dropdown(event)
         } else {
@@ -100,7 +100,11 @@ impl SettingsState {
     }
 
     /// Handle text editing input in entry dialog (same pattern as handle_text_editing_input)
-    fn handle_entry_dialog_text_editing(&mut self, event: &KeyEvent) -> InputResult {
+    fn handle_entry_dialog_text_editing(
+        &mut self,
+        event: &KeyEvent,
+        ctx: &mut InputContext,
+    ) -> InputResult {
         // Check if we're editing JSON
         let is_editing_json = self
             .entry_dialog()
@@ -141,6 +145,10 @@ impl SettingsState {
                         'a' | 'A' => {
                             // Select all
                             dialog.select_all();
+                        }
+                        'v' | 'V' => {
+                            // Paste
+                            ctx.defer(DeferredAction::PasteToSettings);
                         }
                         _ => {}
                     }

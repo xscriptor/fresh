@@ -98,6 +98,15 @@ impl TextInputState {
         self.cursor += c.len_utf8();
     }
 
+    /// Insert a string at the cursor position
+    pub fn insert_str(&mut self, s: &str) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.value.insert_str(self.cursor, s);
+        self.cursor += s.len();
+    }
+
     /// Delete the character before the cursor (backspace)
     pub fn backspace(&mut self) {
         if !self.is_enabled() || self.cursor == 0 {

@@ -639,6 +639,31 @@ impl EntryDialogState {
         }
     }
 
+    pub fn insert_str(&mut self, s: &str) {
+        if !self.editing_text {
+            return;
+        }
+        if let Some(item) = self.current_item_mut() {
+            match &mut item.control {
+                SettingControl::Text(state) => {
+                    state.insert_str(s);
+                }
+                SettingControl::TextList(state) => {
+                    state.insert_str(s);
+                }
+                SettingControl::Number(state) => {
+                    for c in s.chars() {
+                        state.insert_char(c);
+                    }
+                }
+                SettingControl::Json(state) => {
+                    state.insert_str(s);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Handle backspace
     pub fn backspace(&mut self) {
         if !self.editing_text {

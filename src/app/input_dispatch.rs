@@ -168,6 +168,17 @@ impl Editor {
                 }
                 self.close_settings(false);
             }
+            DeferredAction::PasteToSettings => {
+                if let Some(text) = self.clipboard.paste() {
+                    if !text.is_empty() {
+                        if let Some(settings) = &mut self.settings_state {
+                            if let Some(dialog) = settings.entry_dialog_mut() {
+                                dialog.insert_str(&text);
+                            }
+                        }
+                    }
+                }
+            }
             DeferredAction::OpenConfigFile { layer } => {
                 self.open_config_file(layer)?;
             }
