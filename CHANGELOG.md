@@ -1,6 +1,6 @@
 # Release Notes
 
-## 0.1.73
+## 0.1.74
 
 ### Features
 
