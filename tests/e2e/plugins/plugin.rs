@@ -645,6 +645,7 @@ fn test_diagnostics_panel_plugin_loads() {
     let plugins_dir = project_root.join("plugins");
     fs::create_dir(&plugins_dir).unwrap();
     copy_plugin(&plugins_dir, "diagnostics_panel");
+    copy_plugin_lib(&plugins_dir); // Copy lib/ for results-panel.ts import
 
     // Create a simple test file in the project directory (not via TestFixture!)
     let test_file_content = "fn main() {\n    println!(\"test\");\n}\n";

@@ -1,5 +1,33 @@
 # Release Notes
 
+## 0.1.75
+
+This is mostly a bugfix release.
+
+### Bug Fixes
+
+* **Prompt History**: Generic prompt history system with Up/Down navigation, now available for Go to Line and other prompts.
+* **Session External Files**: Files opened from outside the project directory are now restored in sessions.
+* **Fuzzy Search Exact Match Priority**: Open File dialog now prioritizes exact filename matches over fuzzy matches.
+* **Horizontal Scroll**: Fixed cursor position with horizontal scroll after Open File dialog and pressing Enter on long lines.
+* **Multi-Cursor Bracket Skip**: Fixed bracket skip-over with multiple cursors in bulk edit.
+* **F3 Search**: Fixed F3 to allow searching more after editing and to update positions correctly after buffer modifications.
+* **File Explorer**: Removed plain letter shortcuts causing accidental actions, fixed focus after rename/delete, improved new file command behavior.
+* **Terminal**: Fixed scrollback colors, mouse scroll now exits to scrollback mode, fixed viewport position bugs, persist exit message.
+* **Theme Editor**: Fixed reopening after closing the theme editor, allow editing builtin themes (#696), store builtin themes as json instead of hardcoded inside rust.
+* **LSP Diagnostics**: Made diagnostic cache per-buffer to prevent marker position bugs.
+* **Cursor Visibility**: You can see the letter under the block cursor now! Apply REVERSED style to primary cursor for better visibility.
+* **Open Terminal**: Command now available in all contexts.
+* **Open File Dialog**: When run while a terminal is focused, use CWD instead of the internal backing file directory.
+
+### Internal
+
+* Refactored reference highlighting to use overlay system (#694).
+* Built-in themes now loaded from JSON artifacts at build time instead of hardcoded Rust.
+* Removed duplicate dead code from LspTask.
+
+---
+
 ## 0.1.74
 
 ### Features

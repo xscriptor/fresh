@@ -32,16 +32,17 @@ let searchRegex: boolean = false;
 const MAX_RESULTS = 200;
 
 // Define the search-replace mode with keybindings
+// Inherits from "normal" for cursor navigation (Up/Down)
+// Simplified keybindings following UX best practices:
+// - Enter: Execute replace (primary action)
+// - Space: Toggle selection
+// - Escape: Close panel
 editor.defineMode(
   "search-replace-list",
-  null,
+  "normal", // Inherit from normal for cursor movement
   [
-    ["Return", "search_replace_preview"],
+    ["Return", "search_replace_execute"],
     ["space", "search_replace_toggle_item"],
-    ["a", "search_replace_select_all"],
-    ["n", "search_replace_select_none"],
-    ["r", "search_replace_execute"],
-    ["q", "search_replace_close"],
     ["Escape", "search_replace_close"],
   ],
   true // read-only

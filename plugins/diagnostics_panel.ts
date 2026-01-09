@@ -1,624 +1,331 @@
 /// <reference path="./lib/fresh.d.ts" />
-const editor = getEditor();
 
+import {
+  ResultsPanel,
+  ResultItem,
+  ResultsProvider,
+  EventEmitter,
+  getRelativePath,
+} from "./lib/results-panel.ts";
+
+const editor = getEditor();
 
 /**
  * Diagnostics Panel Plugin
  *
- * Interactive diagnostics panel showing LSP diagnostics with:
- * - Real-time updates when diagnostics change
- * - Filter by current file or show all files
- * - Cursor navigation with highlighting
- * - Enter to jump to diagnostic location
+ * Uses VS Code-inspired Provider pattern:
+ * - DiagnosticsProvider emits events when diagnostics change
+ * - ResultsPanel handles UI with syncWithEditor for bidirectional cursor sync
+ * - Toggle between current file and all files
  */
 
-// =============================================================================
-// Types and Interfaces
-// =============================================================================
+// ============================================================================
+// Diagnostics Provider
+// ============================================================================
 
-interface DiagnosticLocation {
-  file: string;
-  line: number;
-  column: number;
+interface DiagnosticResultItem extends ResultItem {
+  diagnosticSeverity: number; // 1=error, 2=warning, 3=info, 4=hint
 }
 
-interface DiagnosticLineMapping {
-  panelLine: number;  // 1-based line in panel
-  location: DiagnosticLocation;
-}
+class DiagnosticsProvider implements ResultsProvider<DiagnosticResultItem> {
+  private _onDidChangeResults = new EventEmitter<void>();
+  readonly onDidChangeResults = this._onDidChangeResults.event;
 
-interface DiagnosticsState {
-  isOpen: boolean;
-  bufferId: number | null;
-  splitId: number | null;
-  sourceSplitId: number | null;  // The split that was active when panel opened
-  sourceBufferId: number | null;
-  showAllFiles: boolean;
-  cachedContent: string;
-  // Maps panel line numbers to diagnostic locations for sync
-  lineMappings: DiagnosticLineMapping[];
-  // Current cursor line in the panel (1-indexed)
-  panelCursorLine: number;
-}
+  private showAllFiles = false;
+  private sourceBufferId: number | null = null;
 
-// =============================================================================
-// State Management
-// =============================================================================
-
-const state: DiagnosticsState = {
-  isOpen: false,
-  bufferId: null,
-  splitId: null,
-  sourceSplitId: null,
-  sourceBufferId: null,
-  showAllFiles: false,  // Default to filtering by current file
-  cachedContent: "",
-  lineMappings: [],
-  panelCursorLine: 1,
-};
-
-// =============================================================================
-// Color Definitions
-// =============================================================================
-
-const colors = {
-  error: [255, 100, 100] as [number, number, number],
-  warning: [255, 200, 100] as [number, number, number],
-  info: [100, 200, 255] as [number, number, number],
-  hint: [150, 150, 150] as [number, number, number],
-  file: [180, 180, 255] as [number, number, number],
-  location: [150, 255, 150] as [number, number, number],
-  header: [255, 200, 100] as [number, number, number],
-  selected: [80, 80, 120] as [number, number, number],
-};
-
-// =============================================================================
-// Keybindings
-// =============================================================================
-
-const keybindings = {
-  goto: "Enter",
-  gotoAlt: "Tab",
-  toggleAll: "a",
-  refresh: "r",
-  close: "q",
-  closeAlt: "Escape",
-  // These are global keybindings, not part of the mode
-  nextDiag: "F8",
-  prevDiag: "Shift+F8",
-};
-
-// =============================================================================
-// Mode Definition
-// =============================================================================
-
-editor.defineMode(
-  "diagnostics-list",
-  "normal",
-  [
-    ["Return", "diagnostics_goto"],
-    [keybindings.gotoAlt, "diagnostics_goto"],
-    [keybindings.toggleAll, "diagnostics_toggle_all"],
-    [keybindings.refresh, "diagnostics_refresh"],
-    [keybindings.close, "diagnostics_close"],
-    [keybindings.closeAlt, "diagnostics_close"],
-  ],
-  true
-);
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-function severityIcon(severity: number): string {
-  switch (severity) {
-    case 1: return "[E]";
-    case 2: return "[W]";
-    case 3: return "[I]";
-    case 4: return "[H]";
-    default: return "[?]";
-  }
-}
-
-function uriToPath(uri: string): string {
-  if (uri.startsWith("file://")) {
-    return uri.slice(7);
-  }
-  return uri;
-}
-
-function getActiveFileUri(): string | null {
-  const bufferId = state.sourceBufferId ?? editor.getActiveBufferId();
-  const path = editor.getBufferPath(bufferId);
-  if (!path) return null;
-  return "file://" + path;
-}
-
-function entriesToContent(entries: TextPropertyEntry[]): string {
-  return entries.map(e => e.text).join("");
-}
-
-// =============================================================================
-// Panel Content Building
-// =============================================================================
-
-function buildPanelEntries(): TextPropertyEntry[] {
-  const entries: TextPropertyEntry[] = [];
-  const diagnostics = editor.getAllDiagnostics();
-
-  // Clear and rebuild line mappings
-  state.lineMappings = [];
-
-  const activeUri = getActiveFileUri();
-  const filterUri = state.showAllFiles ? null : activeUri;
-
-  // Filter diagnostics
-  const filtered = filterUri
-    ? diagnostics.filter(d => d.uri === filterUri)
-    : diagnostics;
-
-  // Group by file
-  const byFile = new Map<string, TsDiagnostic[]>();
-  for (const diag of filtered) {
-    const existing = byFile.get(diag.uri) || [];
-    existing.push(diag);
-    byFile.set(diag.uri, existing);
+  setShowAllFiles(value: boolean): void {
+    this.showAllFiles = value;
+    this._onDidChangeResults.fireVoid();
   }
 
-  // Sort files, with active file first if filtering
-  const files = Array.from(byFile.keys()).sort((a, b) => {
-    if (activeUri) {
-      if (a === activeUri) return -1;
-      if (b === activeUri) return 1;
+  getShowAllFiles(): boolean {
+    return this.showAllFiles;
+  }
+
+  setSourceBuffer(bufferId: number | null): void {
+    this.sourceBufferId = bufferId;
+    // Don't fire change event here - only when filter changes or diagnostics update
+  }
+
+  notifyDiagnosticsChanged(): void {
+    this._onDidChangeResults.fireVoid();
+  }
+
+  provideResults(): DiagnosticResultItem[] {
+    const diagnostics = editor.getAllDiagnostics();
+
+    // Get active file URI for filtering
+    let activeUri: string | null = null;
+    if (this.sourceBufferId !== null) {
+      const path = editor.getBufferPath(this.sourceBufferId);
+      if (path) {
+        activeUri = "file://" + path;
+      }
     }
-    // Simple string comparison (localeCompare has ICU issues in Deno)
-    if (a < b) return -1;
-    if (a > b) return 1;
-    return 0;
-  });
 
-  // Help line (line 1)
-  const helpText = `${keybindings.goto}:goto  ${keybindings.close}:close  ${keybindings.toggleAll}:toggle all  ${keybindings.refresh}:refresh  ${keybindings.nextDiag}/${keybindings.prevDiag}:next/prev\n`;
-  entries.push({
-    text: helpText,
-    properties: { type: "help" },
-  });
+    // Filter diagnostics
+    const filterUri = this.showAllFiles ? null : activeUri;
+    const filtered = filterUri
+      ? diagnostics.filter((d) => d.uri === filterUri)
+      : diagnostics;
 
-  // Header (line 2)
-  let filterLabel: string;
-  if (state.showAllFiles) {
-    filterLabel = editor.t("panel.all_files");
-  } else if (activeUri) {
-    const fileName = editor.pathBasename(uriToPath(activeUri));
-    filterLabel = fileName;
-  } else {
-    filterLabel = editor.t("panel.current_file");
-  }
-  entries.push({
-    text: editor.t("panel.header", { filter: filterLabel }) + "\n",
-    properties: { type: "header" },
-  });
-
-  let currentPanelLine = 3; // Start after help + header
-
-  if (filtered.length === 0) {
-    entries.push({
-      text: "  " + editor.t("panel.no_diagnostics") + "\n",
-      properties: { type: "empty" },
+    // Sort by file, then line, then severity
+    filtered.sort((a, b) => {
+      // File comparison
+      if (a.uri !== b.uri) {
+        // Active file first
+        if (activeUri) {
+          if (a.uri === activeUri) return -1;
+          if (b.uri === activeUri) return 1;
+        }
+        return a.uri < b.uri ? -1 : 1;
+      }
+      // Line comparison
+      const lineDiff = a.range.start.line - b.range.start.line;
+      if (lineDiff !== 0) return lineDiff;
+      // Severity comparison
+      return a.severity - b.severity;
     });
-    currentPanelLine++;
-  } else {
-    let diagIndex = 0;
-    for (const uri of files) {
-      const fileDiags = byFile.get(uri) || [];
-      const filePath = uriToPath(uri);
-      const fileName = editor.pathBasename(filePath);
 
-      // File header (blank line + filename)
-      entries.push({
-        text: `\n${fileName}:\n`,
-        properties: { type: "file-header", uri },
-      });
-      currentPanelLine += 2; // blank line + file header
+    // Convert to ResultItems
+    return filtered.map((diag, index) => {
+      const filePath = this.uriToPath(diag.uri);
+      const line = diag.range.start.line + 1;
+      const col = diag.range.start.character + 1;
+      const message = diag.message.split("\n")[0]; // First line only
 
-      // Sort diagnostics by line, then severity
-      fileDiags.sort((a, b) => {
-        const lineDiff = a.range.start.line - b.range.start.line;
-        if (lineDiff !== 0) return lineDiff;
-        return a.severity - b.severity;
-      });
-
-      for (const diag of fileDiags) {
-        const icon = severityIcon(diag.severity);
-        const line = diag.range.start.line + 1;
-        const col = diag.range.start.character + 1;
-        const msg = diag.message.split("\n")[0]; // First line only
-
-        const location: DiagnosticLocation = {
+      return {
+        id: `diag-${index}-${diag.uri}-${line}-${col}`,
+        label: `${line}:${col} ${message}`,
+        location: {
           file: filePath,
           line: line,
           column: col,
-        };
-
-        // Track mapping for cursor sync
-        state.lineMappings.push({
-          panelLine: currentPanelLine,
-          location: location,
-        });
-
-        entries.push({
-          text: `  ${icon} ${line}:${col} ${msg}\n`,
-          properties: {
-            type: "diagnostic",
-            index: diagIndex,
-            severity: diag.severity,
-            location: location,
-          },
-        });
-        diagIndex++;
-        currentPanelLine++;
-      }
-    }
+        },
+        severity: this.severityToString(diag.severity),
+        diagnosticSeverity: diag.severity,
+        metadata: { uri: diag.uri, message: diag.message },
+      };
+    });
   }
 
-  // Summary
-  const errorCount = filtered.filter(d => d.severity === 1).length;
-  const warningCount = filtered.filter(d => d.severity === 2).length;
-  const infoCount = filtered.filter(d => d.severity === 3).length;
-
-  entries.push({
-    text: "\n",
-    properties: { type: "blank" },
-  });
-  entries.push({
-    text: `${errorCount}E ${warningCount}W ${infoCount}I | a: toggle filter | r: refresh | RET: goto | q: close\n`,
-    properties: { type: "footer" },
-  });
-
-  return entries;
-}
-
-// =============================================================================
-// Highlighting
-// =============================================================================
-
-function applyHighlighting(): void {
-  if (state.bufferId === null) return;
-
-  const bufferId = state.bufferId;
-  editor.clearNamespace(bufferId, "diag");
-
-  const content = state.cachedContent;
-  if (!content) return;
-
-  const lines = content.split("\n");
-  const cursorLine = state.panelCursorLine;
-
-  let byteOffset = 0;
-
-  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-    const line = lines[lineIdx];
-    const lineStart = byteOffset;
-    const lineEnd = byteOffset + line.length;
-    const isCurrentLine = (lineIdx + 1) === cursorLine;
-    const isDiagnosticLine = line.trim().startsWith("[");
-
-    // Highlight current line if it's a diagnostic line (entire line gets background)
-    if (isCurrentLine && isDiagnosticLine) {
-      editor.addOverlay(
-        bufferId, "diag", lineStart, lineEnd,
-        colors.selected[0], colors.selected[1], colors.selected[2],
-        true, true, false
-      );
+  private uriToPath(uri: string): string {
+    if (uri.startsWith("file://")) {
+      return uri.slice(7);
     }
+    return uri;
+  }
 
-    // Help line highlighting (dimmed)
-    if (line.startsWith("Enter:")) {
-      editor.addOverlay(
-        bufferId, "diag", lineStart, lineEnd,
-        colors.hint[0], colors.hint[1], colors.hint[2],
-        false, true, false
-      );
+  private severityToString(
+    severity: number
+  ): "error" | "warning" | "info" | "hint" {
+    switch (severity) {
+      case 1:
+        return "error";
+      case 2:
+        return "warning";
+      case 3:
+        return "info";
+      case 4:
+        return "hint";
+      default:
+        return "info";
     }
-
-    // Header highlighting
-    if (line.startsWith("Diagnostics")) {
-      editor.addOverlay(
-        bufferId, "diag", lineStart, lineEnd,
-        colors.header[0], colors.header[1], colors.header[2],
-        true, true, false
-      );
-    }
-
-    // File header highlighting
-    if (line.endsWith(":") && !line.startsWith("Diagnostics") && !line.startsWith(" ")) {
-      editor.addOverlay(
-        bufferId, "diag", lineStart, lineEnd,
-        colors.file[0], colors.file[1], colors.file[2],
-        false, true, false
-      );
-    }
-
-    // Severity icon highlighting
-    const iconMatch = line.match(/^\s+\[([EWIH?])\]/);
-    if (iconMatch) {
-      const iconStart = lineStart + line.indexOf("[");
-      const iconEnd = iconStart + 3;
-
-      let color: [number, number, number];
-      switch (iconMatch[1]) {
-        case "E": color = colors.error; break;
-        case "W": color = colors.warning; break;
-        case "I": color = colors.info; break;
-        case "H": color = colors.hint; break;
-        default: color = colors.hint;
-      }
-
-      editor.addOverlay(
-        bufferId, "diag", iconStart, iconEnd,
-        color[0], color[1], color[2],
-        false, true, false
-      );
-
-      // Location highlighting (line:col after icon)
-      const locMatch = line.match(/\[.\]\s+(\d+:\d+)/);
-      if (locMatch && locMatch.index !== undefined) {
-        const locStart = lineStart + line.indexOf(locMatch[1]);
-        const locEnd = locStart + locMatch[1].length;
-        editor.addOverlay(
-          bufferId, "diag", locStart, locEnd,
-          colors.location[0], colors.location[1], colors.location[2],
-          false, false, false
-        );
-      }
-    }
-
-    byteOffset += line.length + 1;
   }
 }
 
-function updatePanel(): void {
-  if (state.bufferId === null) return;
+// ============================================================================
+// Panel State
+// ============================================================================
 
-  const entries = buildPanelEntries();
-  state.cachedContent = entriesToContent(entries);
-  editor.setVirtualBufferContent(state.bufferId, entries);
-  applyHighlighting();
+const diagnosticsProvider = new DiagnosticsProvider();
+let panel: ResultsPanel<DiagnosticResultItem> | null = null;
+let isOpen = false;
+let sourceSplitId: number | null = null;
+
+function getTitle(): string {
+  const showAll = diagnosticsProvider.getShowAllFiles();
+  const filterLabel = showAll
+    ? editor.t("panel.all_files")
+    : editor.t("panel.current_file");
+  return editor.t("panel.header", { filter: filterLabel });
 }
 
-// =============================================================================
+// ============================================================================
 // Commands
-// =============================================================================
+// ============================================================================
 
-globalThis.show_diagnostics_panel = async function(): Promise<void> {
-  if (state.isOpen) {
-    // If already open, just focus the panel
-    if (state.splitId !== null) {
-      editor.focusSplit(state.splitId);
-    }
+globalThis.show_diagnostics_panel = async function (): Promise<void> {
+  if (isOpen && panel) {
+    // Already open - just focus the panel
+    panel.focusPanel();
     return;
   }
 
-  state.sourceSplitId = editor.getActiveSplitId();
-  state.sourceBufferId = editor.getActiveBufferId();
+  // Capture source context
+  sourceSplitId = editor.getActiveSplitId();
+  const sourceBufferId = editor.getActiveBufferId();
+  diagnosticsProvider.setSourceBuffer(sourceBufferId);
 
-  const entries = buildPanelEntries();
-  state.cachedContent = entriesToContent(entries);
-
-  // Create a horizontal split below the current buffer
-  const result = await editor.createVirtualBufferInSplit({
-    name: "*Diagnostics*",
-    mode: "diagnostics-list",
-    read_only: true,
-    entries: entries,
-    ratio: 0.7,  // Source keeps 70%, panel takes 30%
-    direction: "horizontal",  // Split below
-    panel_id: "diagnostics",  // Enable idempotent updates
-    show_line_numbers: false,
-    show_cursors: true,
-    editing_disabled: true,
+  // Create the panel
+  panel = new ResultsPanel(editor, "diagnostics", diagnosticsProvider, {
+    title: getTitle(),
+    syncWithEditor: true, // Bidirectional cursor sync
+    groupBy: "file", // Group diagnostics by file
+    ratio: 0.7,
+    onSelect: (item) => {
+      if (item.location) {
+        panel!.openInSource(
+          item.location.file,
+          item.location.line,
+          item.location.column
+        );
+        const displayPath = getRelativePath(editor, item.location.file);
+        editor.setStatus(
+          editor.t("status.jumped_to", {
+            file: displayPath,
+            line: String(item.location.line),
+          })
+        );
+      }
+    },
+    onClose: () => {
+      isOpen = false;
+      panel = null;
+      sourceSplitId = null;
+      editor.setStatus(editor.t("status.closed"));
+    },
   });
 
-  if (result.buffer_id !== null) {
-    state.isOpen = true;
-    state.bufferId = result.buffer_id;
-    state.splitId = result.split_id ?? null;
-    applyHighlighting();
+  await panel.show();
+  isOpen = true;
 
-    const diagnostics = editor.getAllDiagnostics();
-    editor.setStatus(editor.t("status.diagnostics_count", { count: String(diagnostics.length) }));
+  // Show count
+  const diagnostics = editor.getAllDiagnostics();
+  editor.setStatus(
+    editor.t("status.diagnostics_count", { count: String(diagnostics.length) })
+  );
+};
+
+globalThis.diagnostics_close = function (): void {
+  if (panel) {
+    panel.close();
+  }
+};
+
+globalThis.diagnostics_goto = function (): void {
+  if (!panel || !isOpen) return;
+
+  const item = panel.getSelectedItem();
+  if (item && item.location) {
+    panel.openInSource(
+      item.location.file,
+      item.location.line,
+      item.location.column
+    );
+    const displayPath = getRelativePath(editor, item.location.file);
+    editor.setStatus(
+      editor.t("status.jumped_to", {
+        file: displayPath,
+        line: String(item.location.line),
+      })
+    );
   } else {
-    state.sourceSplitId = null;
-    state.sourceBufferId = null;
-    editor.setStatus(editor.t("status.failed_to_open"));
+    editor.setStatus(editor.t("status.move_to_diagnostic"));
   }
 };
 
-globalThis.diagnostics_close = function(): void {
-  if (!state.isOpen) return;
+globalThis.diagnostics_toggle_all = function (): void {
+  if (!isOpen) return;
 
-  // Capture values before clearing state
-  const splitId = state.splitId;
-  const sourceSplitId = state.sourceSplitId;
-  const sourceBufferId = state.sourceBufferId;
-  const bufferId = state.bufferId;
+  const newValue = !diagnosticsProvider.getShowAllFiles();
+  diagnosticsProvider.setShowAllFiles(newValue);
 
-  // Clear state FIRST to prevent event handlers from trying to update
-  state.isOpen = false;
-  state.bufferId = null;
-  state.splitId = null;
-  state.sourceSplitId = null;
-  state.sourceBufferId = null;
-  state.cachedContent = "";
-
-  // Try to close the split first
-  let splitClosed = false;
-  if (splitId !== null) {
-    splitClosed = editor.closeSplit(splitId);
+  // Update panel title
+  if (panel) {
+    (panel as unknown as { options: { title: string } }).options.title = getTitle();
   }
 
-  // If split couldn't be closed (only split), switch buffer back to source
-  if (!splitClosed && splitId !== null && sourceBufferId !== null) {
-    editor.setSplitBuffer(splitId, sourceBufferId);
-  }
-
-  // Always delete the virtual buffer completely (removes from all splits)
-  if (bufferId !== null) {
-    editor.closeBuffer(bufferId);
-  }
-
-  // Focus back on the source split
-  if (sourceSplitId !== null) {
-    editor.focusSplit(sourceSplitId);
-  }
-
-  editor.setStatus(editor.t("status.closed"));
-};
-
-globalThis.diagnostics_goto = function(): void {
-  if (!state.isOpen || state.bufferId === null) return;
-
-  const props = editor.getTextPropertiesAtCursor(state.bufferId);
-
-  if (props.length > 0) {
-    const location = props[0].location as { file: string; line: number; column: number } | undefined;
-    if (location) {
-      const file = location.file;
-      const line = location.line;
-      const col = location.column;
-
-      // Focus back on the source split and navigate to the location
-      if (state.sourceSplitId !== null) {
-        editor.focusSplit(state.sourceSplitId);
-      }
-      editor.openFile(file, line, col);
-      editor.setStatus(editor.t("status.jumped_to", { file: editor.pathBasename(file), line: String(line) }));
-      return;
-    }
-  }
-
-  editor.setStatus(editor.t("status.move_to_diagnostic"));
-};
-
-globalThis.diagnostics_toggle_all = function(): void {
-  if (!state.isOpen) return;
-
-  state.showAllFiles = !state.showAllFiles;
-  updatePanel();
-
-  const label = state.showAllFiles ? editor.t("panel.all_files") : editor.t("panel.current_file");
+  const label = newValue
+    ? editor.t("panel.all_files")
+    : editor.t("panel.current_file");
   editor.setStatus(editor.t("status.showing", { label }));
 };
 
-globalThis.diagnostics_refresh = function(): void {
-  if (!state.isOpen) return;
+globalThis.diagnostics_refresh = function (): void {
+  if (!isOpen) return;
 
-  updatePanel();
+  diagnosticsProvider.notifyDiagnosticsChanged();
   editor.setStatus(editor.t("status.refreshed"));
 };
 
-globalThis.toggle_diagnostics_panel = function(): void {
-  if (state.isOpen) {
+globalThis.toggle_diagnostics_panel = function (): void {
+  if (isOpen) {
     globalThis.diagnostics_close();
   } else {
     globalThis.show_diagnostics_panel();
   }
 };
 
-// =============================================================================
+// ============================================================================
 // Event Handlers
-// =============================================================================
+// ============================================================================
 
-// Find the panel line that matches a source file location
-function findPanelLineForLocation(file: string, sourceLine: number): number | null {
-  // Find the first diagnostic on this source line for this file
-  for (const mapping of state.lineMappings) {
-    if (mapping.location.file === file && mapping.location.line === sourceLine) {
-      return mapping.panelLine;
-    }
-  }
-  return null;
-}
-
-// Convert a 1-based line number to byte offset in the cached content
-function lineToByteOffset(lineNumber: number): number {
-  const lines = state.cachedContent.split("\n");
-  let offset = 0;
-  for (let i = 0; i < lineNumber - 1 && i < lines.length; i++) {
-    offset += lines[i].length + 1; // +1 for newline
-  }
-  return offset;
-}
-
-// Sync the panel cursor to match a source location
-function syncPanelCursorToSourceLine(file: string, sourceLine: number): void {
-  if (state.bufferId === null) return;
-
-  const panelLine = findPanelLineForLocation(file, sourceLine);
-  if (panelLine !== null) {
-    // Convert panel line number to byte offset and move cursor
-    const byteOffset = lineToByteOffset(panelLine);
-    state.panelCursorLine = panelLine;
-    editor.setBufferCursor(state.bufferId, byteOffset);
-    applyHighlighting();
-  }
-}
-
-globalThis.on_diagnostics_cursor_moved = function(data: {
-  buffer_id: number;
-  cursor_id: number;
-  old_position: number;
-  new_position: number;
-  line: number;
-}): void {
-  if (!state.isOpen || state.bufferId === null) return;
-
-  // If cursor moved in the diagnostics panel, update the tracked line and highlighting
-  if (data.buffer_id === state.bufferId) {
-    state.panelCursorLine = data.line;
-    applyHighlighting();
-    return;
-  }
-
-  // Cursor moved in a non-panel buffer - sync the panel cursor to match
-  // This handles F8/Shift+F8 jumps and normal cursor movement in source buffers
-  const path = editor.getBufferPath(data.buffer_id);
-  if (path) {
-    syncPanelCursorToSourceLine(path, data.line);
-  }
-};
-
-globalThis.on_diagnostics_updated = function(_data: {
+// When diagnostics update, notify the provider
+globalThis.on_diagnostics_updated = function (_data: {
   uri: string;
   count: number;
 }): void {
-  if (!state.isOpen) return;
-  updatePanel();
+  if (isOpen) {
+    diagnosticsProvider.notifyDiagnosticsChanged();
+  }
 };
 
-globalThis.on_diagnostics_buffer_activated = function(data: {
+// When a different buffer becomes active, update filter context
+globalThis.on_diagnostics_buffer_activated = function (data: {
   buffer_id: number;
 }): void {
-  if (!state.isOpen) return;
+  if (!isOpen || !panel) return;
 
-  // If the diagnostics panel itself became active, don't update source tracking
-  if (data.buffer_id === state.bufferId) {
+  // Ignore if the diagnostics panel itself became active
+  if (panel.bufferId === data.buffer_id) {
     return;
   }
 
-  // A different buffer became active - update source buffer and refresh the panel
-  state.sourceBufferId = data.buffer_id;
-  updatePanel();
+  // Update source buffer and refresh if not showing all files
+  diagnosticsProvider.setSourceBuffer(data.buffer_id);
+  if (!diagnosticsProvider.getShowAllFiles()) {
+    diagnosticsProvider.notifyDiagnosticsChanged();
+    // Update title
+    (panel as unknown as { options: { title: string } }).options.title = getTitle();
+  }
 };
 
 // Register event handlers
-editor.on("cursor_moved", "on_diagnostics_cursor_moved");
 editor.on("diagnostics_updated", "on_diagnostics_updated");
 editor.on("buffer_activated", "on_diagnostics_buffer_activated");
 
-// =============================================================================
+// ============================================================================
+// Mode Definition (for custom keybindings beyond Enter/Escape)
+// ============================================================================
+
+// Note: The ResultsPanel already defines a mode with Enter/Escape.
+// We define additional keybindings here.
+editor.defineMode(
+  "diagnostics-extra",
+  "diagnostics-results", // Parent mode from ResultsPanel
+  [
+    ["a", "diagnostics_toggle_all"],
+    ["r", "diagnostics_refresh"],
+    ["Tab", "diagnostics_goto"],
+  ],
+  true
+);
+
+// ============================================================================
 // Command Registration
-// =============================================================================
+// ============================================================================
 
 editor.registerCommand(
   "%cmd.show_diagnostics_panel",
@@ -634,9 +341,9 @@ editor.registerCommand(
   "normal"
 );
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 editor.setStatus(editor.t("status.loaded"));
-editor.debug("Diagnostics Panel plugin initialized");
+editor.debug("Diagnostics Panel plugin initialized (Provider pattern v2)");

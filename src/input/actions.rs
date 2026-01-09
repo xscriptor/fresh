@@ -2193,6 +2193,7 @@ pub fn action_to_events(
         | Action::PopupCancel
         | Action::ToggleFileExplorer
         | Action::ToggleMenuBar
+        | Action::ToggleTabBar
         | Action::FocusFileExplorer
         | Action::FocusEditor
         | Action::SetBackground
@@ -3471,6 +3472,103 @@ mod tests {
             state.buffer.to_string().unwrap(),
             "foo()\nfoo()",
             "Closing paren should skip over existing paren, not create 'foo())'"
+        );
+    }
+
+    #[test]
+    fn test_bracket_auto_close_three_cursors_with_skip_over() {
+        // Test case: type 'foo()' with THREE cursors - the closing paren should skip over
+        // This tests the bug where skip-over fails with 3+ cursors
+        let mut state =
+            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+
+        // Start with three empty lines
+        state.apply(&Event::Insert {
+            position: 0,
+            text: "\n\n".to_string(),
+            cursor_id: CursorId(0),
+        });
+
+        // Primary cursor at position 0 (start of first line)
+        state.apply(&Event::MoveCursor {
+            cursor_id: CursorId(0),
+            old_position: 2,
+            new_position: 0,
+            old_anchor: None,
+            new_anchor: None,
+            old_sticky_column: 0,
+            new_sticky_column: 0,
+        });
+
+        // Add a second cursor at position 1 (start of second line)
+        state.apply(&Event::AddCursor {
+            position: 1,
+            cursor_id: CursorId(1),
+            anchor: None,
+        });
+
+        // Add a third cursor at position 2 (start of third line)
+        state.apply(&Event::AddCursor {
+            position: 2,
+            cursor_id: CursorId(2),
+            anchor: None,
+        });
+
+        // Type 'foo'
+        for ch in ['f', 'o', 'o'] {
+            let events =
+                action_to_events(&mut state, Action::InsertChar(ch), 4, true, 80, 24).unwrap();
+            for event in events {
+                state.apply(&event);
+            }
+        }
+
+        // Verify we have "foo\nfoo\nfoo" before typing '('
+        assert_eq!(
+            state.buffer.to_string().unwrap(),
+            "foo\nfoo\nfoo",
+            "Before typing '(' we should have 'foo' on each line"
+        );
+
+        // Type '(' - should auto-close to '()'
+        let events =
+            action_to_events(&mut state, Action::InsertChar('('), 4, true, 80, 24).unwrap();
+        for event in events {
+            state.apply(&event);
+        }
+
+        // Verify auto-close happened
+        assert_eq!(
+            state.buffer.to_string().unwrap(),
+            "foo()\nfoo()\nfoo()",
+            "Auto-close should add closing paren on all three lines"
+        );
+
+        // Verify cursor positions - all should be between ( and )
+        let cursor_positions: Vec<_> = state.cursors.iter().map(|(_, c)| c.position).collect();
+        // Buffer is "foo()\nfoo()\nfoo()" - positions:
+        // f(0)o(1)o(2)((3))(4)\n(5)f(6)o(7)o(8)((9))(10)\n(11)f(12)o(13)o(14)((15))(16)
+        // Cursors should be at 4, 10, 16 (between each ( and ))
+        assert!(
+            cursor_positions.contains(&4)
+                && cursor_positions.contains(&10)
+                && cursor_positions.contains(&16),
+            "Cursors should be between parens at positions 4, 10, and 16, got: {:?}",
+            cursor_positions
+        );
+
+        // Type ')' - should skip over the existing ')', not add another
+        let events =
+            action_to_events(&mut state, Action::InsertChar(')'), 4, true, 80, 24).unwrap();
+        for event in events {
+            state.apply(&event);
+        }
+
+        // Should still be "foo()\nfoo()\nfoo()" - the ')' should have skipped over
+        assert_eq!(
+            state.buffer.to_string().unwrap(),
+            "foo()\nfoo()\nfoo()",
+            "Closing paren should skip over existing paren on ALL THREE lines"
         );
     }
 

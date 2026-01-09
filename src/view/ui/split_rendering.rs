@@ -320,7 +320,6 @@ struct SelectionContext {
 
 struct DecorationContext {
     highlight_spans: Vec<crate::primitives::highlighter::HighlightSpan>,
-    reference_spans: Vec<crate::primitives::highlighter::HighlightSpan>,
     semantic_token_spans: Vec<crate::primitives::highlighter::HighlightSpan>,
     viewport_overlays: Vec<(crate::view::overlay::Overlay, Range<usize>)>,
     virtual_text_lookup: HashMap<usize, Vec<crate::view::virtual_text::VirtualText>>,
@@ -387,7 +386,6 @@ struct CharStyleContext<'a> {
     is_selected: bool,
     theme: &'a crate::view::theme::Theme,
     highlight_spans: &'a [crate::primitives::highlighter::HighlightSpan],
-    reference_spans: &'a [crate::primitives::highlighter::HighlightSpan],
     semantic_token_spans: &'a [crate::primitives::highlighter::HighlightSpan],
     viewport_overlays: &'a [(crate::view::overlay::Overlay, Range<usize>)],
     primary_cursor_position: usize,
@@ -599,16 +597,8 @@ fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
         style = style.fg(highlight_color.unwrap());
     }
 
-    // Apply reference highlighting (word under cursor)
-    if let Some(bp) = ctx.byte_pos {
-        if let Some(reference_span) = ctx
-            .reference_spans
-            .iter()
-            .find(|span| span.range.contains(&bp))
-        {
-            style = style.bg(reference_span.color);
-        }
-    }
+    // Note: Reference highlighting (word under cursor) is now handled via overlays
+    // in the "Apply overlay styles" section below
 
     // Apply LSP semantic token foreground color when no custom token style is set.
     if ctx.token_style.is_none() {
@@ -725,6 +715,7 @@ impl SplitRenderer {
         hovered_maximize_split: Option<crate::model::event::SplitId>,
         is_maximized: bool,
         relative_line_numbers: bool,
+        tab_bar_visible: bool,
     ) -> (
         Vec<(
             crate::model::event::SplitId,
@@ -758,7 +749,7 @@ impl SplitRenderer {
         for (split_id, buffer_id, split_area) in visible_buffers {
             let is_active = split_id == active_split_id;
 
-            let layout = Self::split_layout(split_area);
+            let layout = Self::split_layout(split_area, tab_bar_visible);
             let (split_buffers, tab_scroll_offset) =
                 Self::split_buffers_for_tabs(split_view_states.as_deref(), split_id, buffer_id);
 
@@ -771,69 +762,79 @@ impl SplitRenderer {
                 }
             });
 
-            // Render tabs for this split and collect hit areas
-            let tab_hit_areas = TabsRenderer::render_for_split(
-                frame,
-                layout.tabs_rect,
-                &split_buffers,
-                buffers,
-                buffer_metadata,
-                composite_buffers,
-                buffer_id, // The currently displayed buffer in this split
-                theme,
-                is_active,
-                tab_scroll_offset,
-                tab_hover_for_split,
-            );
+            // Only render tabs and split control buttons when tab bar is visible
+            if tab_bar_visible {
+                // Render tabs for this split and collect hit areas
+                let tab_hit_areas = TabsRenderer::render_for_split(
+                    frame,
+                    layout.tabs_rect,
+                    &split_buffers,
+                    buffers,
+                    buffer_metadata,
+                    composite_buffers,
+                    buffer_id, // The currently displayed buffer in this split
+                    theme,
+                    is_active,
+                    tab_scroll_offset,
+                    tab_hover_for_split,
+                );
 
-            // Add tab row to hit areas (all tabs share the same row)
-            let tab_row = layout.tabs_rect.y;
-            for (buf_id, start_col, end_col, close_start) in tab_hit_areas {
-                all_tab_areas.push((split_id, buf_id, tab_row, start_col, end_col, close_start));
-            }
-
-            // Render split control buttons at the right side of tabs row
-            // Show maximize/unmaximize button when: multiple splits exist OR we're currently maximized
-            // Show close button when: multiple splits exist AND we're not maximized
-            let show_maximize_btn = has_multiple_splits || is_maximized;
-            let show_close_btn = has_multiple_splits && !is_maximized;
-
-            if show_maximize_btn || show_close_btn {
-                // Calculate button positions from right edge
-                // Layout: [maximize] [space] [close] |
-                let mut btn_x = layout.tabs_rect.x + layout.tabs_rect.width.saturating_sub(2);
-
-                // Render close button first (rightmost) if visible
-                if show_close_btn {
-                    let is_hovered = hovered_close_split == Some(split_id);
-                    let close_fg = if is_hovered {
-                        theme.tab_close_hover_fg
-                    } else {
-                        theme.line_number_fg
-                    };
-                    let close_button = Paragraph::new("×")
-                        .style(Style::default().fg(close_fg).bg(theme.tab_separator_bg));
-                    let close_area = Rect::new(btn_x, tab_row, 1, 1);
-                    frame.render_widget(close_button, close_area);
-                    close_split_areas.push((split_id, tab_row, btn_x, btn_x + 1));
-                    btn_x = btn_x.saturating_sub(2); // Move left with 1 space for next button
+                // Add tab row to hit areas (all tabs share the same row)
+                let tab_row = layout.tabs_rect.y;
+                for (buf_id, start_col, end_col, close_start) in tab_hit_areas {
+                    all_tab_areas.push((
+                        split_id,
+                        buf_id,
+                        tab_row,
+                        start_col,
+                        end_col,
+                        close_start,
+                    ));
                 }
 
-                // Render maximize/unmaximize button
-                if show_maximize_btn {
-                    let is_hovered = hovered_maximize_split == Some(split_id);
-                    let max_fg = if is_hovered {
-                        theme.tab_close_hover_fg
-                    } else {
-                        theme.line_number_fg
-                    };
-                    // Use □ for maximize, ⧉ for unmaximize (restore)
-                    let icon = if is_maximized { "⧉" } else { "□" };
-                    let max_button = Paragraph::new(icon)
-                        .style(Style::default().fg(max_fg).bg(theme.tab_separator_bg));
-                    let max_area = Rect::new(btn_x, tab_row, 1, 1);
-                    frame.render_widget(max_button, max_area);
-                    maximize_split_areas.push((split_id, tab_row, btn_x, btn_x + 1));
+                // Render split control buttons at the right side of tabs row
+                // Show maximize/unmaximize button when: multiple splits exist OR we're currently maximized
+                // Show close button when: multiple splits exist AND we're not maximized
+                let show_maximize_btn = has_multiple_splits || is_maximized;
+                let show_close_btn = has_multiple_splits && !is_maximized;
+
+                if show_maximize_btn || show_close_btn {
+                    // Calculate button positions from right edge
+                    // Layout: [maximize] [space] [close] |
+                    let mut btn_x = layout.tabs_rect.x + layout.tabs_rect.width.saturating_sub(2);
+
+                    // Render close button first (rightmost) if visible
+                    if show_close_btn {
+                        let is_hovered = hovered_close_split == Some(split_id);
+                        let close_fg = if is_hovered {
+                            theme.tab_close_hover_fg
+                        } else {
+                            theme.line_number_fg
+                        };
+                        let close_button = Paragraph::new("×")
+                            .style(Style::default().fg(close_fg).bg(theme.tab_separator_bg));
+                        let close_area = Rect::new(btn_x, tab_row, 1, 1);
+                        frame.render_widget(close_button, close_area);
+                        close_split_areas.push((split_id, tab_row, btn_x, btn_x + 1));
+                        btn_x = btn_x.saturating_sub(2); // Move left with 1 space for next button
+                    }
+
+                    // Render maximize/unmaximize button
+                    if show_maximize_btn {
+                        let is_hovered = hovered_maximize_split == Some(split_id);
+                        let max_fg = if is_hovered {
+                            theme.tab_close_hover_fg
+                        } else {
+                            theme.line_number_fg
+                        };
+                        // Use □ for maximize, ⧉ for unmaximize (restore)
+                        let icon = if is_maximized { "⧉" } else { "□" };
+                        let max_button = Paragraph::new(icon)
+                            .style(Style::default().fg(max_fg).bg(theme.tab_separator_bg));
+                        let max_area = Rect::new(btn_x, tab_row, 1, 1);
+                        frame.render_widget(max_button, max_area);
+                        maximize_split_areas.push((split_id, tab_row, btn_x, btn_x + 1));
+                    }
                 }
             }
 
@@ -1682,8 +1683,8 @@ impl SplitRenderer {
         }
     }
 
-    fn split_layout(split_area: Rect) -> SplitLayout {
-        let tabs_height = 1u16;
+    fn split_layout(split_area: Rect, tab_bar_visible: bool) -> SplitLayout {
+        let tabs_height = if tab_bar_visible { 1u16 } else { 0u16 };
         let scrollbar_width = 1u16;
 
         let tabs_rect = Rect::new(split_area.x, split_area.y, split_area.width, tabs_height);
@@ -2828,19 +2829,18 @@ impl SplitRenderer {
             highlight_context_bytes,
         );
 
-        // Get reference highlights through debounced cache
-        let reference_spans = state
-            .reference_highlight_cache
-            .get_highlights(
-                &mut state.reference_highlighter,
-                &state.buffer,
-                primary_cursor_position,
-                viewport_start,
-                viewport_end,
-                highlight_context_bytes,
-                theme.semantic_highlight_bg,
-            )
-            .to_vec();
+        // Update reference highlight overlays (debounced, creates overlays that auto-adjust)
+        state.reference_highlight_overlay.update(
+            &state.buffer,
+            &mut state.overlays,
+            &mut state.marker_list,
+            &mut state.reference_highlighter,
+            primary_cursor_position,
+            viewport_start,
+            viewport_end,
+            highlight_context_bytes,
+            theme.semantic_highlight_bg,
+        );
 
         // Resolve semantic tokens for this viewport (if version matches)
         let semantic_token_spans = if let Some(store) = &state.semantic_tokens {
@@ -2889,7 +2889,6 @@ impl SplitRenderer {
 
         DecorationContext {
             highlight_spans,
-            reference_spans,
             semantic_token_spans,
             viewport_overlays,
             virtual_text_lookup,
@@ -2991,7 +2990,6 @@ impl SplitRenderer {
         let cursor_line = state.buffer.get_line_number(primary_cursor_position);
 
         let highlight_spans = &decorations.highlight_spans;
-        let reference_spans = &decorations.reference_spans;
         let semantic_token_spans = &decorations.semantic_token_spans;
         let viewport_overlays = &decorations.viewport_overlays;
         let virtual_text_lookup = &decorations.virtual_text_lookup;
@@ -3185,8 +3183,9 @@ impl SplitRenderer {
                             // IMPORTANT: If the cursor is on this ANSI byte, track it
                             if let Some(bp) = byte_pos {
                                 if bp == primary_cursor_position && !have_cursor {
-                                    cursor_screen_x =
-                                        gutter_width as u16 + visible_char_count as u16;
+                                    // Account for horizontal scrolling by using col_offset - left_col
+                                    cursor_screen_x = gutter_width as u16
+                                        + col_offset.saturating_sub(left_col) as u16;
                                     cursor_screen_y = lines_rendered.saturating_sub(1) as u16;
                                     have_cursor = true;
                                 }
@@ -3274,7 +3273,6 @@ impl SplitRenderer {
                         is_selected,
                         theme,
                         highlight_spans,
-                        reference_spans,
                         semantic_token_spans,
                         viewport_overlays,
                         primary_cursor_position,
@@ -3491,11 +3489,14 @@ impl SplitRenderer {
                     if is_primary_at_end && last_seg_y.is_some() {
                         // Cursor position now includes gutter width (consistent with main cursor tracking)
                         // For empty lines, cursor is at gutter width (right after gutter)
-                        // For non-empty lines without newline, cursor is after the last character
+                        // For non-empty lines without newline, cursor is after the last visible character
+                        // Account for horizontal scrolling by using col_offset - left_col
                         cursor_screen_x = if line_len_chars == 0 {
                             gutter_width as u16
                         } else {
-                            gutter_width as u16 + line_len_chars as u16
+                            // col_offset is the visual column after the last character
+                            // Subtract left_col to get the screen position after horizontal scroll
+                            gutter_width as u16 + col_offset.saturating_sub(left_col) as u16
                         };
                         cursor_screen_y = last_seg_y.unwrap();
                         have_cursor = true;

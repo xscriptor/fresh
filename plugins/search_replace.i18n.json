@@ -28,7 +28,7 @@
     "panel.results": "Results: {count}",
     "panel.limited": "(limited to {max})",
     "panel.selected": "({selected} selected)",
-    "panel.help": "[SPC] toggle  [a] all  [n] none  [r] REPLACE  [RET] preview  [q] close"
+    "panel.help": "[Up/Down] navigate  [Space] toggle  [Enter] replace  [Esc] close"
   },
   "cs": {
     "cmd.search_replace": "Hledat a nahradit v projektu",
@@ -59,7 +59,7 @@
     "panel.results": "Vysledky: {count}",
     "panel.limited": "(omezeno na {max})",
     "panel.selected": "({selected} vybrano)",
-    "panel.help": "[MEZERNIK] prepnout  [a] vse  [n] nic  [r] NAHRADIT  [ENTER] nahled  [q] zavrit"
+    "panel.help": "[Nahoru/Dolu] navigace  [Mezernik] prepnout  [Enter] nahradit  [Esc] zavrit"
   },
   "de": {
     "cmd.search_replace": "Suchen und Ersetzen im Projekt",
@@ -90,7 +90,7 @@
     "panel.results": "Ergebnisse: {count}",
     "panel.limited": "(begrenzt auf {max})",
     "panel.selected": "({selected} ausgewaehlt)",
-    "panel.help": "[LEER] umschalten  [a] alle  [n] keine  [r] ERSETZEN  [RET] Vorschau  [q] schliessen"
+    "panel.help": "[Auf/Ab] navigieren  [Leer] umschalten  [Enter] ersetzen  [Esc] schliessen"
   },
   "es": {
     "cmd.search_replace": "Buscar y Reemplazar en Proyecto",
@@ -121,7 +121,7 @@
     "panel.results": "Resultados: {count}",
     "panel.limited": "(limitado a {max})",
     "panel.selected": "({selected} seleccionados)",
-    "panel.help": "[ESP] alternar  [a] todos  [n] ninguno  [r] REEMPLAZAR  [RET] vista previa  [q] cerrar"
+    "panel.help": "[Arriba/Abajo] navegar  [Espacio] alternar  [Enter] reemplazar  [Esc] cerrar"
   },
   "fr": {
     "cmd.search_replace": "Rechercher et Remplacer dans le Projet",
@@ -152,7 +152,7 @@
     "panel.results": "Resultats : {count}",
     "panel.limited": "(limite a {max})",
     "panel.selected": "({selected} selectionnes)",
-    "panel.help": "[ESP] basculer  [a] tous  [n] aucun  [r] REMPLACER  [RET] apercu  [q] fermer"
+    "panel.help": "[Haut/Bas] naviguer  [Espace] basculer  [Entree] remplacer  [Esc] fermer"
   },
   "it": {
     "cmd.search_replace": "Cerca e sostituisci nel progetto",
@@ -183,7 +183,7 @@
     "panel.results": "Risultati: {count}",
     "panel.limited": "(limitati a {max})",
     "panel.selected": "({selected} selezionati)",
-    "panel.help": "[SPZ] alterna  [a] tutti  [n] nessuno  [r] SOSTITUISCI  [RET] anteprima  [q] chiudi"
+    "panel.help": "[Su/Giu] naviga  [Spazio] alterna  [Invio] sostituisci  [Esc] chiudi"
   },
   "ja": {
     "cmd.search_replace": "プロジェクト内で検索と置換",
@@ -214,7 +214,7 @@
     "panel.results": "結果: {count}",
     "panel.limited": "(最大 {max} 件)",
     "panel.selected": "({selected} 件選択)",
-    "panel.help": "[スペース] 切替  [a] 全選択  [n] 全解除  [r] 置換  [RET] プレビュー  [q] 閉じる"
+    "panel.help": "[上/下] 移動  [スペース] 切替  [Enter] 置換  [Esc] 閉じる"
   },
   "ko": {
     "cmd.search_replace": "프로젝트에서 검색 및 바꾸기",
@@ -245,7 +245,7 @@
     "panel.results": "결과: {count}",
     "panel.limited": "(최대 {max}개)",
     "panel.selected": "({selected}개 선택)",
-    "panel.help": "[스페이스] 전환  [a] 전체  [n] 없음  [r] 바꾸기  [엔터] 미리보기  [q] 닫기"
+    "panel.help": "[위/아래] 탐색  [스페이스] 전환  [엔터] 바꾸기  [Esc] 닫기"
   },
   "pt-BR": {
     "cmd.search_replace": "Pesquisar e Substituir no Projeto",
@@ -276,7 +276,7 @@
     "panel.results": "Resultados: {count}",
     "panel.limited": "(limitado a {max})",
     "panel.selected": "({selected} selecionados)",
-    "panel.help": "[ESP] alternar  [a] todos  [n] nenhum  [r] SUBSTITUIR  [ENTER] visualizar  [q] fechar"
+    "panel.help": "[Cima/Baixo] navegar  [Espaco] alternar  [Enter] substituir  [Esc] fechar"
   },
   "ru": {
     "cmd.search_replace": "Поиск и замена в проекте",
@@ -307,7 +307,7 @@
     "panel.results": "Результаты: {count}",
     "panel.limited": "(ограничено до {max})",
     "panel.selected": "({selected} выбрано)",
-    "panel.help": "[ПРОБЕЛ] переключить  [a] все  [n] ничего  [r] ЗАМЕНИТЬ  [ВВОД] просмотр  [q] закрыть"
+    "panel.help": "[Вверх/Вниз] навигация  [Пробел] переключить  [Enter] заменить  [Esc] закрыть"
   },
   "th": {
     "cmd.search_replace": "ค้นหาและแทนที่ในโปรเจกต์",
@@ -338,7 +338,7 @@
     "panel.results": "ผลลัพธ์: {count}",
     "panel.limited": "(จำกัด {max})",
     "panel.selected": "(เลือก {selected})",
-    "panel.help": "[เว้นวรรค] สลับ  [a] ทั้งหมด  [n] ไม่มี  [r] แทนที่  [ENTER] ดูตัวอย่าง  [q] ปิด"
+    "panel.help": "[ขึ้น/ลง] นำทาง  [เว้นวรรค] สลับ  [Enter] แทนที่  [Esc] ปิด"
   },
   "uk": {
     "cmd.search_replace": "Пошук та заміна в проекті",
@@ -369,7 +369,7 @@
     "panel.results": "Результати: {count}",
     "panel.limited": "(обмежено до {max})",
     "panel.selected": "({selected} вибрано)",
-    "panel.help": "[ПРОБІЛ] перемкнути  [a] всі  [n] нічого  [r] ЗАМІНИТИ  [ВВІД] перегляд  [q] закрити"
+    "panel.help": "[Вгору/Вниз] навігація  [Пробіл] перемкнути  [Enter] замінити  [Esc] закрити"
   },
   "zh-CN": {
     "cmd.search_replace": "在项目中搜索和替换",
@@ -400,6 +400,6 @@
     "panel.results": "结果: {count}",
     "panel.limited": "(限制为 {max})",
     "panel.selected": "(已选择 {selected})",
-    "panel.help": "[空格] 切换  [a] 全选  [n] 全不选  [r] 替换  [回车] 预览  [q] 关闭"
+    "panel.help": "[上/下] 导航  [空格] 切换  [回车] 替换  [Esc] 关闭"
   }
 }

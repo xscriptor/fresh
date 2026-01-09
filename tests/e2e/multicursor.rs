@@ -1408,3 +1408,150 @@ fn test_esc_returns_to_original_cursor_position() {
         "After pressing Esc, cursor should return to original position {original_position} but is at {final_position}"
     );
 }
+
+/// Test auto-close parentheses with multiple cursors on separate lines
+/// Repro: Create file, add 3 empty lines, go to first line, add 2 cursors below, type "foo()"
+/// Issue: Auto-close parentheses may interfere with multiple cursor editing
+#[test]
+fn test_auto_close_parens_multiple_cursors() {
+    use crate::common::harness::HarnessOptions;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use fresh::config::Config;
+    use std::fs;
+    use tempfile::TempDir;
+
+    // Create harness with auto_indent enabled (required for auto-close)
+    let mut config = Config::default();
+    config.editor.auto_indent = true;
+    let mut harness = EditorTestHarness::create(
+        80,
+        24,
+        HarnessOptions::new()
+            .with_config(config)
+            .without_empty_plugins_dir(),
+    )
+    .unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("test.py");
+    // Create file with .py extension so it's recognized as Python
+    fs::write(&file_path, "").unwrap();
+
+    harness.open_file(&file_path).unwrap();
+    harness.render().unwrap();
+
+    // Verify language is detected as Python (for auto-close to work)
+    let language = harness.editor().active_state().language.clone();
+    println!("Detected language: {}", language);
+    assert_eq!(language, "python", "File should be detected as Python");
+
+    // =========================================================================
+    // STEP 1: First verify auto-close works with SINGLE cursor
+    // =========================================================================
+    harness.type_text("test(").unwrap();
+    harness.render().unwrap();
+
+    let single_cursor_content = harness.get_buffer_content().unwrap();
+    assert_eq!(
+        single_cursor_content, "test()",
+        "BASELINE: Auto-close should work with single cursor. Got: {:?}",
+        single_cursor_content
+    );
+    println!(
+        "✓ Single cursor auto-close works: {:?}",
+        single_cursor_content
+    );
+
+    // Clear and start fresh for multi-cursor test
+    harness
+        .send_key(KeyCode::Char('a'), KeyModifiers::CONTROL)
+        .unwrap(); // Select all
+    harness
+        .send_key(KeyCode::Backspace, KeyModifiers::NONE)
+        .unwrap(); // Delete
+    harness.render().unwrap();
+
+    // =========================================================================
+    // STEP 2: Now test with multiple cursors
+    // =========================================================================
+
+    // Create three empty lines by pressing Enter 3 times
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Buffer should be "\n\n\n" (3 newlines)
+    harness.assert_buffer_content("\n\n\n");
+
+    // Go to the first line
+    harness
+        .send_key(KeyCode::Home, KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Add two cursors below (so we have cursors on lines 1, 2, and 3)
+    harness.editor_mut().add_cursor_below();
+    harness.editor_mut().add_cursor_below();
+    harness.render().unwrap();
+
+    // Should have 3 cursors
+    assert_eq!(
+        harness.editor().active_state().cursors.iter().count(),
+        3,
+        "Should have 3 cursors"
+    );
+
+    // Print cursor positions before typing
+    println!("\nBefore typing 'foo()':");
+    for (id, cursor) in harness.editor().active_state().cursors.iter() {
+        println!("  Cursor {:?}: position={}", id, cursor.position);
+    }
+
+    // Type "foo" character by character
+    harness.type_text("foo").unwrap();
+    harness.render().unwrap();
+
+    println!("\nAfter typing 'foo':");
+    println!("Buffer: {:?}", harness.get_buffer_content().unwrap());
+
+    // Now type '(' - this should auto-close to '()'
+    harness.type_text("(").unwrap();
+    harness.render().unwrap();
+
+    println!("\nAfter typing '(':");
+    println!("Buffer: {:?}", harness.get_buffer_content().unwrap());
+
+    // Buffer should now have "foo()" on each of the 3 lines
+    // Expected: "foo()\nfoo()\nfoo()\n"
+    let buffer_content = harness.get_buffer_content().unwrap();
+    assert_eq!(
+        buffer_content, "foo()\nfoo()\nfoo()\n",
+        "Auto-close should have added closing paren on ALL lines with multiple cursors. Buffer: {:?}",
+        buffer_content
+    );
+    println!("✓ Auto-close works with multiple cursors");
+
+    // Now type ')' - this should skip over the existing ')' on ALL cursors (not add another)
+    harness.type_text(")").unwrap();
+    harness.render().unwrap();
+
+    println!("\nAfter typing ')':");
+    println!("Buffer: {:?}", harness.get_buffer_content().unwrap());
+
+    // Final buffer should be "foo()\nfoo()\nfoo()\n" - no double parens
+    // BUG: With multiple cursors, skip-over positions are miscalculated causing
+    // `)` to be inserted at wrong positions instead of skipping
+    let final_buffer = harness.get_buffer_content().unwrap();
+    assert_eq!(
+        final_buffer, "foo()\nfoo()\nfoo()\n",
+        "Skip-over should work with multiple cursors - typing ')' should skip existing ')' on ALL lines. Got: {:?}",
+        final_buffer
+    );
+}
