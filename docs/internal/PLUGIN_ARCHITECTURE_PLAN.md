@@ -193,9 +193,9 @@ This API would:
 #### Phase 3: Migrate Plugins (Long-term)
 
 Migrate existing plugins to use the new API:
-- Find References → `showResultsPanel`
-- Diagnostics Panel → `showResultsPanel`
-- Search Replace → `showResultsPanel` with `multiSelect`
+- Find References → `showResultsPanel` ✓ (Done)
+- Diagnostics Panel → Keep as Controller (needs bidirectional cursor sync, filter toggle, auto-refresh)
+- Search Replace → Consider `showResultsPanel` with `multiSelect` (already simplified keybindings)
 
 ---
 
@@ -252,8 +252,8 @@ The key insight is: **Let the editor own the UI.** Plugins should provide data a
 
 1. ~~Create ResultsPanel abstraction~~ ✓ (Done - `plugins/lib/results-panel.ts`)
 2. ~~Migrate Find References to use ResultsPanel~~ ✓ (Done)
-3. Fix Live Grep preview update issue
-4. Fix Git Grep cursor positioning
-5. Simplify Search Replace keybindings
-6. Migrate Diagnostics Panel to use ResultsPanel
+3. ~~Fix Live Grep preview update issue~~ ✓ (Done - added `prompt_selection_changed` hook)
+4. ~~Git Grep cursor positioning~~ ✓ (Verified - code is correct, uses same pattern as Find References)
+5. ~~Simplify Search Replace keybindings~~ ✓ (Done - uses Enter/Space/Escape, inherits from normal)
+6. ~~Diagnostics Panel migration~~ → Keep as Controller (too complex for ResultsPanel)
 7. Document the Provider pattern as the recommended approach
