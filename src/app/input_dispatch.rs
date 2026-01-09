@@ -232,6 +232,22 @@ impl Editor {
                     }
                 }
             }
+            DeferredAction::PromptSelectionChanged { selected_index } => {
+                // Fire hook for plugin prompts so they can update live preview
+                if let Some(prompt) = &self.prompt {
+                    if let crate::view::prompt::PromptType::Plugin { custom_type } =
+                        &prompt.prompt_type
+                    {
+                        self.plugin_manager.run_hook(
+                            "prompt_selection_changed",
+                            crate::services::plugins::hooks::HookArgs::PromptSelectionChanged {
+                                prompt_type: custom_type.clone(),
+                                selected_index,
+                            },
+                        );
+                    }
+                }
+            }
 
             // Popup actions
             DeferredAction::ClosePopup => {

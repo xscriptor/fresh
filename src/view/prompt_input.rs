@@ -155,6 +155,15 @@ impl InputHandler for Prompt {
                         ) {
                             ctx.defer(DeferredAction::PreviewThemeFromPrompt);
                         }
+                        // For plugin prompts, notify about selection change (for live preview)
+                        if matches!(
+                            self.prompt_type,
+                            crate::view::prompt::PromptType::Plugin { .. }
+                        ) {
+                            ctx.defer(DeferredAction::PromptSelectionChanged {
+                                selected_index: new_selected,
+                            });
+                        }
                     }
                 } else {
                     // No suggestions - use history
@@ -184,6 +193,15 @@ impl InputHandler for Prompt {
                             crate::view::prompt::PromptType::SelectTheme { .. }
                         ) {
                             ctx.defer(DeferredAction::PreviewThemeFromPrompt);
+                        }
+                        // For plugin prompts, notify about selection change (for live preview)
+                        if matches!(
+                            self.prompt_type,
+                            crate::view::prompt::PromptType::Plugin { .. }
+                        ) {
+                            ctx.defer(DeferredAction::PromptSelectionChanged {
+                                selected_index: new_selected,
+                            });
                         }
                     }
                 } else {

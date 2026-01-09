@@ -117,6 +117,8 @@ pub enum DeferredAction {
     PromptHistoryNext,
     /// Preview theme from the current prompt input (for SelectTheme)
     PreviewThemeFromPrompt,
+    /// Notify plugin that prompt selection changed (for live preview in Live Grep, etc.)
+    PromptSelectionChanged { selected_index: usize },
 
     // Popup actions
     ClosePopup,
