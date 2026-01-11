@@ -1,5 +1,30 @@
 # Release Notes
 
+## 0.1.76
+
+### Features
+
+* **Toggle Tab Bar/Menu Bar**: Hide or show tab bar and menu bar via command palette or View menu (#618).
+* **Plugin Enable/Disable**: New config options to enable or disable individual plugins.
+* **Improved Settings UI**: Layer-aware modified indicators, column headers for Map controls, visual indication for read-only fields in Settings UI entry dialogs.
+* **Git Grep Preview**: Live preview panel with debouncing for Git Grep results.
+
+### Bug Fixes
+
+* **Map Control Click**: Fixed "Add new" button requiring double-click instead of single click (#604).
+* **File Explorer Session**: Persist `show_hidden` and `show_gitignored` settings across sessions (#569).
+* **Line Numbers Config**: Respect `line_numbers` config when launching without a file argument (#539).
+* **Find References UX**: Now uses prompt mode for consistent search experience.
+* **i18n Placeholders**: Fixed string interpolation format in plugin translations (#706).
+
+### Internal
+
+* ResultsPanel abstraction with VS Code-style Provider pattern for plugin UI.
+* TypeScript type checking for plugins.
+* Test reliability improvements for e2e tests.
+
+---
+
 ## 0.1.75
 
 This is mostly a bugfix release.
