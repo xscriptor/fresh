@@ -143,6 +143,10 @@ pub fn render_settings(
         modal_area.height.saturating_sub(2),
     );
 
+    // Determine layout mode: vertical (narrow) vs horizontal (wide)
+    // Narrow mode when inner width < 60 columns
+    let narrow_mode = inner_area.width < 60;
+
     // Always render search bar at the top (1 line when inactive, 2 when active with results)
     let search_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
     let search_header_height = if state.search_active {
@@ -164,6 +168,56 @@ pub fn render_settings(
         inner_area.height.saturating_sub(search_header_height),
     );
 
+    // Create layout tracker
+    let mut layout = SettingsLayout::new(modal_area);
+
+    if narrow_mode {
+        // Vertical layout: categories on top, items below
+        render_vertical_layout(frame, content_area, modal_area, state, theme, &mut layout);
+    } else {
+        // Horizontal layout: categories left, items right
+        render_horizontal_layout(frame, content_area, modal_area, state, theme, &mut layout);
+    }
+
+    // Determine the topmost dialog layer and apply dimming to layers below
+    let has_confirm = state.showing_confirm_dialog;
+    let has_entry = state.showing_entry_dialog();
+    let has_help = state.showing_help;
+
+    // Render confirmation dialog if showing
+    if has_confirm {
+        if !has_entry && !has_help {
+            crate::view::dimming::apply_dimming(frame, modal_area);
+        }
+        render_confirm_dialog(frame, modal_area, state, theme);
+    }
+
+    // Render entry detail dialog if showing
+    if has_entry {
+        if !has_help {
+            crate::view::dimming::apply_dimming(frame, modal_area);
+        }
+        render_entry_dialog(frame, modal_area, state, theme);
+    }
+
+    // Render help overlay if showing
+    if has_help {
+        crate::view::dimming::apply_dimming(frame, modal_area);
+        render_help_overlay(frame, modal_area, theme);
+    }
+
+    layout
+}
+
+/// Render horizontal layout (wide mode): categories left, items right
+fn render_horizontal_layout(
+    frame: &mut Frame,
+    content_area: Rect,
+    modal_area: Rect,
+    state: &mut SettingsState,
+    theme: &Theme,
+    layout: &mut SettingsLayout,
+) {
     // Layout: [left panel (categories)] | [right panel (settings)]
     let chunks =
         Layout::horizontal([Constraint::Length(25), Constraint::Min(40)]).split(content_area);
@@ -171,11 +225,8 @@ pub fn render_settings(
     let categories_area = chunks[0];
     let settings_area = chunks[1];
 
-    // Create layout tracker
-    let mut layout = SettingsLayout::new(modal_area);
-
     // Render category list (left panel)
-    render_categories(frame, categories_area, state, theme, &mut layout);
+    render_categories(frame, categories_area, state, theme, layout);
 
     // Render separator with visual connection to selected category
     let separator_area = Rect::new(
@@ -193,7 +244,6 @@ pub fn render_settings(
     );
 
     // Render settings (right panel) or search results
-    // Add horizontal padding from separator
     let horizontal_padding = 2;
     let settings_inner = Rect::new(
         settings_area.x + horizontal_padding,
@@ -203,46 +253,154 @@ pub fn render_settings(
     );
 
     if state.search_active && !state.search_results.is_empty() {
-        render_search_results(frame, settings_inner, state, theme, &mut layout);
+        render_search_results(frame, settings_inner, state, theme, layout);
     } else {
-        render_settings_panel(frame, settings_inner, state, theme, &mut layout);
+        render_settings_panel(frame, settings_inner, state, theme, layout);
     }
 
-    // Render footer with buttons
-    render_footer(frame, modal_area, state, theme, &mut layout);
+    // Render footer with buttons (horizontal layout)
+    render_footer(frame, modal_area, state, theme, layout, false);
+}
 
-    // Determine the topmost dialog layer and apply dimming to layers below
-    let has_confirm = state.showing_confirm_dialog;
-    let has_entry = state.showing_entry_dialog();
-    let has_help = state.showing_help;
+/// Render vertical layout (narrow mode): categories on top, items below
+fn render_vertical_layout(
+    frame: &mut Frame,
+    content_area: Rect,
+    modal_area: Rect,
+    state: &mut SettingsState,
+    theme: &Theme,
+    layout: &mut SettingsLayout,
+) {
+    // Calculate footer height for vertical buttons (5 buttons + separators)
+    let footer_height = 7;
 
-    // Render confirmation dialog if showing
-    if has_confirm {
-        // Dim the main settings modal if confirm is showing
-        // (but only if confirm is the topmost, otherwise entry/help dialog will dim it)
-        if !has_entry && !has_help {
-            crate::view::dimming::apply_dimming(frame, modal_area);
+    // Layout: [categories (3 lines)] / [separator] / [settings] / [footer]
+    let main_height = content_area.height.saturating_sub(footer_height);
+    let category_height = 3u16.min(main_height);
+    let settings_height = main_height.saturating_sub(category_height + 1); // +1 for separator
+
+    // Categories area (horizontal strip at top)
+    let categories_area = Rect::new(
+        content_area.x,
+        content_area.y,
+        content_area.width,
+        category_height,
+    );
+
+    // Separator line
+    let sep_y = content_area.y + category_height;
+
+    // Settings area
+    let settings_area = Rect::new(
+        content_area.x,
+        sep_y + 1,
+        content_area.width,
+        settings_height,
+    );
+
+    // Render horizontal category strip
+    render_categories_horizontal(frame, categories_area, state, theme, layout);
+
+    // Render horizontal separator
+    if sep_y < content_area.y + content_area.height {
+        let sep_line: String = "─".repeat(content_area.width as usize);
+        frame.render_widget(
+            Paragraph::new(sep_line).style(Style::default().fg(theme.split_separator_fg)),
+            Rect::new(content_area.x, sep_y, content_area.width, 1),
+        );
+    }
+
+    // Render settings panel
+    if state.search_active && !state.search_results.is_empty() {
+        render_search_results(frame, settings_area, state, theme, layout);
+    } else {
+        render_settings_panel(frame, settings_area, state, theme, layout);
+    }
+
+    // Render footer with buttons (vertical layout)
+    render_footer(frame, modal_area, state, theme, layout, true);
+}
+
+/// Render categories as a horizontal strip (for narrow mode)
+fn render_categories_horizontal(
+    frame: &mut Frame,
+    area: Rect,
+    state: &SettingsState,
+    theme: &Theme,
+    layout: &mut SettingsLayout,
+) {
+    use super::state::FocusPanel;
+
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let is_focused = state.focus_panel == FocusPanel::Categories;
+
+    // Build category labels with indicators
+    let mut spans = Vec::new();
+    let mut total_width = 0u16;
+
+    for (i, page) in state.pages.iter().enumerate() {
+        let is_selected = i == state.selected_category;
+        let has_modified = page.items.iter().any(|item| item.modified);
+
+        let indicator = if has_modified { "● " } else { "  " };
+        let name = &page.name;
+
+        let style = if is_selected && is_focused {
+            Style::default()
+                .fg(theme.menu_highlight_fg)
+                .bg(theme.menu_highlight_bg)
+                .add_modifier(Modifier::BOLD)
+        } else if is_selected {
+            Style::default()
+                .fg(theme.menu_highlight_fg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.popup_text_fg)
+        };
+
+        let indicator_style = if has_modified {
+            Style::default().fg(theme.menu_highlight_fg)
+        } else {
+            style
+        };
+
+        // Add separator between categories
+        if i > 0 {
+            spans.push(Span::styled(
+                " │ ",
+                Style::default().fg(theme.split_separator_fg),
+            ));
+            total_width += 3;
         }
-        render_confirm_dialog(frame, modal_area, state, theme);
+
+        spans.push(Span::styled(indicator, indicator_style));
+        spans.push(Span::styled(name.as_str(), style));
+        total_width += (indicator.len() + name.len()) as u16;
+
+        // Track category rect for click handling (approximate)
+        let cat_x = area.x + total_width.saturating_sub((indicator.len() + name.len()) as u16);
+        let cat_width = (indicator.len() + name.len()) as u16;
+        layout
+            .categories
+            .push((i, Rect::new(cat_x, area.y, cat_width, 1)));
     }
 
-    // Render entry detail dialog if showing
-    if has_entry {
-        // Dim everything below (including confirm dialog if visible)
-        if !has_help {
-            crate::view::dimming::apply_dimming(frame, modal_area);
-        }
-        render_entry_dialog(frame, modal_area, state, theme);
-    }
+    // Render the category line
+    let line = Line::from(spans);
+    frame.render_widget(Paragraph::new(line), area);
 
-    // Render help overlay if showing
-    if has_help {
-        // Help is topmost, dim everything below
-        crate::view::dimming::apply_dimming(frame, modal_area);
-        render_help_overlay(frame, modal_area, theme);
+    // Show navigation hint on line 2 if space
+    if area.height >= 2 {
+        let hint = "←→: Switch category";
+        let hint_style = Style::default().fg(theme.line_number_fg);
+        frame.render_widget(
+            Paragraph::new(hint).style(hint_style),
+            Rect::new(area.x, area.y + 1, area.width, 1),
+        );
     }
-
-    layout
 }
 
 /// Render the category list
@@ -1546,18 +1704,25 @@ fn render_button(
 }
 
 /// Render footer with action buttons
+/// When `vertical` is true, buttons are stacked vertically (for narrow mode)
 fn render_footer(
     frame: &mut Frame,
     modal_area: Rect,
     state: &SettingsState,
     theme: &Theme,
     layout: &mut SettingsLayout,
+    vertical: bool,
 ) {
     use super::layout::SettingsHit;
     use super::state::FocusPanel;
 
     // Guard against too-small modal
     if modal_area.height < 4 || modal_area.width < 10 {
+        return;
+    }
+
+    if vertical {
+        render_footer_vertical(frame, modal_area, state, theme, layout);
         return;
     }
 
@@ -1775,6 +1940,172 @@ fn render_footer(
         Paragraph::new(help.as_str()).style(help_style),
         Rect::new(help_start_x, footer_y, help_width, 1),
     );
+}
+
+/// Render footer with buttons stacked vertically (for narrow mode)
+fn render_footer_vertical(
+    frame: &mut Frame,
+    modal_area: Rect,
+    state: &SettingsState,
+    theme: &Theme,
+    layout: &mut SettingsLayout,
+) {
+    use super::layout::SettingsHit;
+    use super::state::FocusPanel;
+
+    // Footer takes bottom 7 lines: separator + 5 buttons + help
+    let footer_height = 7u16;
+    let footer_y = modal_area
+        .y
+        .saturating_add(modal_area.height.saturating_sub(footer_height));
+    let footer_width = modal_area.width.saturating_sub(2);
+
+    // Draw top separator
+    let sep_y = footer_y;
+    if sep_y > modal_area.y {
+        let sep_line: String = "─".repeat(footer_width as usize);
+        frame.render_widget(
+            Paragraph::new(sep_line).style(Style::default().fg(theme.split_separator_fg)),
+            Rect::new(modal_area.x + 1, sep_y, footer_width, 1),
+        );
+    }
+
+    // Check if footer has keyboard focus
+    let footer_focused = state.focus_panel == FocusPanel::Footer;
+
+    // Determine hover and keyboard focus states for buttons
+    let layer_hovered = matches!(state.hover_hit, Some(SettingsHit::LayerButton));
+    let reset_hovered = matches!(state.hover_hit, Some(SettingsHit::ResetButton));
+    let save_hovered = matches!(state.hover_hit, Some(SettingsHit::SaveButton));
+    let cancel_hovered = matches!(state.hover_hit, Some(SettingsHit::CancelButton));
+    let edit_hovered = matches!(state.hover_hit, Some(SettingsHit::EditButton));
+
+    let layer_focused = footer_focused && state.footer_button_index == 0;
+    let reset_focused = footer_focused && state.footer_button_index == 1;
+    let save_focused = footer_focused && state.footer_button_index == 2;
+    let cancel_focused = footer_focused && state.footer_button_index == 3;
+    let edit_focused = footer_focused && state.footer_button_index == 4;
+
+    // Get translated button labels
+    let save_label = t!("settings.btn_save").to_string();
+    let cancel_label = t!("settings.btn_cancel").to_string();
+    let reset_label = t!("settings.btn_reset").to_string();
+    let edit_label = t!("settings.btn_edit").to_string();
+
+    // Build button text
+    let layer_text = format!("[ {} ]", state.target_layer_name());
+    let layer_text_focused = format!(">[ {} ]", state.target_layer_name());
+    let save_text = format!("[ {} ]", save_label);
+    let save_text_focused = format!(">[ {} ]", save_label);
+    let cancel_text = format!("[ {} ]", cancel_label);
+    let cancel_text_focused = format!(">[ {} ]", cancel_label);
+    let reset_text = format!("[ {} ]", reset_label);
+    let reset_text_focused = format!(">[ {} ]", reset_label);
+    let edit_text = format!("[ {} ]", edit_label);
+    let edit_text_focused = format!(">[ {} ]", edit_label);
+
+    // Render buttons vertically, centered
+    let button_x = modal_area.x + 2;
+    let mut y = sep_y + 1;
+
+    // Layer button
+    let layer_width = str_width(if layer_focused {
+        &layer_text_focused
+    } else {
+        &layer_text
+    }) as u16;
+    let layer_area = Rect::new(button_x, y, layer_width.min(footer_width), 1);
+    render_button(
+        frame,
+        layer_area,
+        &layer_text,
+        &layer_text_focused,
+        layer_focused,
+        layer_hovered,
+        theme,
+        false,
+    );
+    layout.layer_button = Some(layer_area);
+    y += 1;
+
+    // Save button
+    let save_width = str_width(if save_focused {
+        &save_text_focused
+    } else {
+        &save_text
+    }) as u16;
+    let save_area = Rect::new(button_x, y, save_width.min(footer_width), 1);
+    render_button(
+        frame,
+        save_area,
+        &save_text,
+        &save_text_focused,
+        save_focused,
+        save_hovered,
+        theme,
+        false,
+    );
+    layout.save_button = Some(save_area);
+    y += 1;
+
+    // Reset button
+    let reset_width = str_width(if reset_focused {
+        &reset_text_focused
+    } else {
+        &reset_text
+    }) as u16;
+    let reset_area = Rect::new(button_x, y, reset_width.min(footer_width), 1);
+    render_button(
+        frame,
+        reset_area,
+        &reset_text,
+        &reset_text_focused,
+        reset_focused,
+        reset_hovered,
+        theme,
+        false,
+    );
+    layout.reset_button = Some(reset_area);
+    y += 1;
+
+    // Cancel button
+    let cancel_width = str_width(if cancel_focused {
+        &cancel_text_focused
+    } else {
+        &cancel_text
+    }) as u16;
+    let cancel_area = Rect::new(button_x, y, cancel_width.min(footer_width), 1);
+    render_button(
+        frame,
+        cancel_area,
+        &cancel_text,
+        &cancel_text_focused,
+        cancel_focused,
+        cancel_hovered,
+        theme,
+        false,
+    );
+    layout.cancel_button = Some(cancel_area);
+    y += 1;
+
+    // Edit button
+    let edit_width = str_width(if edit_focused {
+        &edit_text_focused
+    } else {
+        &edit_text
+    }) as u16;
+    let edit_area = Rect::new(button_x, y, edit_width.min(footer_width), 1);
+    render_button(
+        frame,
+        edit_area,
+        &edit_text,
+        &edit_text_focused,
+        edit_focused,
+        edit_hovered,
+        theme,
+        true, // dimmed
+    );
+    layout.edit_button = Some(edit_area);
 }
 
 /// Render the search header with query input
