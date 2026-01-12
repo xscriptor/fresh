@@ -9,9 +9,9 @@
     "current_line_bg": [30, 30, 30],
     "line_number_fg": [82, 80, 83],
     "line_number_bg": [20, 20, 20],
-    "diff_add_bg": [23, 116, 43],
-    "diff_remove_bg": [152, 0, 41],
-    "diff_modify_bg": [155, 137, 37]
+    "diff_add_bg": [123, 216, 143],
+    "diff_remove_bg": [252, 97, 141],
+    "diff_modify_bg": [255, 237, 137]
   },
   "ui": {
     "tab_active_fg": [255, 237, 137],
@@ -43,10 +43,11 @@
     "prompt_selection_bg": [255, 237, 137],
     "popup_border_fg": [82, 80, 83],
     "popup_bg": [25, 25, 25],
+    "popup_selection_fg": [20, 20, 20],
     "popup_selection_bg": [255, 237, 137],
-    "popup_text_fg": [20, 20, 20],
+    "popup_text_fg": [247, 241, 255],
     "suggestion_bg": [25, 25, 25],
-    "suggestion_selected_bg": [255, 237, 137],
+    "suggestion_selected_bg": [181, 158, 84],
     "help_bg": [20, 20, 20],
     "help_fg": [247, 241, 255],
     "help_key_fg": [255, 237, 137],
@@ -81,22 +82,22 @@
   },
   "diagnostic": {
     "error_fg": [252, 97, 141],
-    "error_bg": [152, 0, 41],
+    "error_bg": [60, 20, 30],
     "warning_fg": [255, 237, 137],
-    "warning_bg": [155, 137, 37],
+    "warning_bg": [60, 50, 10],
     "info_fg": [71, 230, 255],
-    "info_bg": [0, 130, 155],
+    "info_bg": [10, 40, 50],
     "hint_fg": [82, 80, 83],
     "hint_bg": [20, 20, 20]
   },
   "syntax": {
     "keyword": [255, 237, 137],
-    "string": [71, 230, 255],
+    "string": [123, 216, 143],
     "function": [71, 230, 255],
     "type": [252, 97, 141],
     "variable": [247, 241, 255],
     "constant": [71, 230, 255],
-    "operator": [247, 241, 255],
+    "operator": [255, 153, 153],
     "comment": [102, 100, 103]
   }
 }
