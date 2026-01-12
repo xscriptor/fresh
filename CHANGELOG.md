@@ -1,5 +1,34 @@
 # Release Notes
 
+## 0.1.77
+
+### Documentation
+
+* **macOS Terminal Tips**: Added keyboard enhancement flags configuration guide.
+
+### Features
+
+* **LSP Semantic Highlighting** (@Asuka-Minato).
+* **macOS Keybinding Display**: Native symbols (⌃, ⌥, ⇧) instead of Ctrl+/Alt+/Shift+.
+* **Odin Language Support**: Syntax highlighting (sublime-syntax from @Tetralux) and OLS LSP configuration (@xoxorwr).
+* **File Explorer Git Indicators**: Shows modified/added status for files and folders via new plugin (#526) (@Asuka-Minato).
+* **Keyboard Enhancement Flags Config**: New config options for more granular control over kitty protocol usage (`keyboard_disambiguate_escape_codes`, `keyboard_report_event_types`, `keyboard_report_alternate_keys`, `keyboard_report_all_keys_as_escape_codes`).
+
+### Bug Fixes
+
+* **Menu Keybinding Display**: Consistent keybinding symbols in menus on macOS (#703).
+* **Git Find File Popup**: Smart path truncation preserving filename (#707).
+* **File Owner Preservation**: Preserve owner when saving files with group write privileges (#743).
+
+### Internal
+
+* Telemetry and update checks now debounce to once per day.
+* Terminal mode handling refactored into dedicated module.
+* Resolved ~300+ clippy warnings.
+* Bumped url (2.5.8), libc (0.2.180) (@dependabot).
+
+---
+
 ## 0.1.76
 
 ### Features
