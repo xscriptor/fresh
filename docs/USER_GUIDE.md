@@ -552,41 +552,13 @@ Follow these steps to clear the **Ctrl + Alt + Up** and **Ctrl + Alt + Down** sh
 
 *Note: If you still experience issues, check **Settings** > **Keyboard** > **Application Shortcuts** to ensure no custom commands are overriding these keys.*
 
-### macOS: Shift + Arrow Key Shortcuts in Terminal.app
-
-Follow these steps to map **Shift + Up** and **Shift + Down** to specific escape sequences in your macOS Terminal.
-
----
-
-#### Step-by-Step Instructions
-
-1.  **Open Settings**: Launch Terminal and go to **Terminal** > **Settings** (or press `Cmd + ,`).
-2.  **Navigate to Keyboard**: Click the **Profiles** tab, then select the **Keyboard** sub-tab.
-3.  **Add First Shortcut (Cursor Up)**:
-    * Click the **Plus (+)** icon at the bottom left of the list.
-    * **Key**: Select `Cursor Up`.
-    * **Modifier**: Select `Shift`.
-    * **Action**: Select `Send Text`.
-    * **Input**: Type `\033[1;2A`
-    * Click **OK**.
-4.  **Add Second Shortcut (Cursor Down)**:
-    * Click the **Plus (+)** icon again.
-    * **Key**: Select `Cursor Down`.
-    * **Modifier**: Select `Shift`.
-    * **Action**: Select `Send Text`.
-    * **Input**: Type `\033[1;2B`
-    * Click **OK**.
-
----
-
-#### Configuration Summary
-
-| Shortcut | Key | Modifier | Action | Escape Sequence |
-| :--- | :--- | :--- | :--- | :--- |
-| **Shift + Up** | Cursor Up | Shift | Send Text | `\033[1;2A` |
-| **Shift + Down** | Cursor Down | Shift | Send Text | `\033[1;2B` |
-
 ### macOS Terminal Tips
+
+**TL;DR: Recommended Terminals**
+- **Kitty**: Best experience out of the box. Add `macos_option_as_alt left` to config.
+- **Ghostty**: Best experience out of the box. Add `macos-option-as-alt = left` to config.
+- **Terminal.app**: [Import Fresh.terminal profile](../scripts/macOS/Fresh.terminal) to fix keybindings.
+- **iTerm2**: Follow the [configuration instructions](#iterm2-setup) below.
 
 Fresh works best on macOS when you understand the interaction between the operating system, your terminal emulator, and the editor. This section covers common issues and recommended configurations.
 
@@ -602,7 +574,7 @@ Fresh includes a dedicated macOS keymap that addresses terminal-specific challen
 
 The macOS keymap is designed around these constraints:
 
-**Ctrl+Shift combinations don't work.** Most macOS terminals cannot reliably send Ctrl+Shift sequences. For example, Ctrl+Shift+Z produces a caron character (ˇ) instead of being recognized as a key chord. The macOS keymap uses Ctrl+Alt as an alternative modifier.
+**Ctrl+Shift combinations don't work.** Some macOS terminals cannot reliably send Ctrl+Shift sequences. For example, Ctrl+Shift+Z produces a caron character (ˇ) instead of being recognized as a key chord. The macOS keymap uses Ctrl+Alt as an alternative modifier.
 
 **Some Ctrl keys are ASCII control characters.** In terminal protocols, Ctrl+J is Line Feed (newline), Ctrl+M is Carriage Return (Enter), and Ctrl+I is Tab. Binding actions to these keys causes erratic behavior. The macOS keymap avoids these collisions.
 
@@ -618,12 +590,83 @@ For the best experience with Fresh on macOS, use a terminal that supports the **
 
 | Terminal | KKP Support | Notes |
 | :--- | :--- | :--- |
-| **Kitty** | Full | Best keyboard handling; set `macos_option_as_alt left` in config |
-| **Ghostty** | Full | Modern, fast |
-| **WezTerm** | Full | Highly configurable |
-| **Alacritty** | Full | GPU-accelerated |
-| **iTerm2** | CSI u | Enable in Preferences → Profiles → Keys → "Report modifiers using CSI u" |
-| **Terminal.app** | None | Requires manual key mappings (see above) |
+| **Kitty** | Full | Set `macos_option_as_alt left` in config |
+| **Ghostty** | Full | Set `macos-option-as-alt = left` in config |
+| **iTerm2** | CSI u | Requires configuration (see below) |
+| **Terminal.app** | None | Requires manual key mappings (see below) |
+
+#### iTerm2 Setup
+
+To get the best experience with iTerm2, you need to enable CSI u support and configure the Option key.
+
+1.  Go to **Settings** > **Profiles** > **Keys**.
+2.  **General** tab:
+    *   Check **Report keys using CSI u**. This allows Fresh to distinguish between combinations like `Ctrl+I` and `Tab`.
+    *   Set **Left Option key** to **Esc+**. This treats the Option key as Meta/Alt.
+    *   Set **Right Option key** to **Normal** if you use it for special characters (or Esc+ if you want it as Alt too).
+
+![iTerm2 Profile Keys](macos-iterm-profile-keys.png)
+
+#### Apple Terminal.app Setup
+
+Apple's built-in Terminal requires manual configuration to work well with modern terminal editors.
+
+**Option as Meta:**
+1.  Go to **Settings** > **Profiles** > **Keyboard**.
+2.  Check **Use Option as Meta key**.
+
+![Terminal Option as Meta](mac-terminal-option-as-meta.png)
+
+**Key Mappings:**
+Fresh relies on Shift+Arrow keys for selection, but Terminal.app often doesn't send these by default.
+
+**Easier Method: Import Profile**
+We provide a pre-configured profile that sets up colors and key mappings for you.
+1.  Locate `scripts/macOS/Fresh.terminal` in the repository.
+2.  In Terminal.app, go to **Settings** > **Profiles**.
+3.  Click the gear icon at the bottom of the sidebar and select **Import...**.
+4.  Select the `Fresh.terminal` file.
+
+**Manual Configuration:**
+If you prefer to configure it manually:
+1.  In **Settings** > **Profiles** > **Keyboard**, click the `+` button.
+2.  Map **Shift + Cursor Up** to send text `\033[1;2A` (press Esc then type `[1;2A`).
+3.  Map **Shift + Cursor Down** to send text `\033[1;2B`.
+
+The full list of keys:
+
+- Control + Option
+
+    Up: \033[1;7A
+
+    Down: \033[1;7B
+
+    Right: \033[1;7C
+
+    Left: \033[1;7D
+
+- Control + Shift
+
+    Up: \033[1;6A
+
+    Down: \033[1;6B
+
+    Right: \033[1;6C
+
+    Left: \033[1;6D
+
+- Shift
+
+    Up: \033[1;2A
+
+    Down: \033[1;2B
+
+    Right: \033[1;2C
+
+    Left: \033[1;2D
+
+
+![Terminal Keymaps](mac-terminal-keymaps.png)
 
 #### Keyboard Enhancement Flags
 
@@ -680,20 +723,9 @@ To use Ctrl+Arrow in Fresh for word movement or multi-cursor:
 
 Alternatively, Fresh's macOS keymap provides **Alt+Arrow** as the primary word movement binding, which doesn't conflict with Mission Control.
 
-#### Option Key as Meta
+#### Option Key on International Keyboards
 
-For Alt-based shortcuts to work, your terminal must send the Option key as an escape sequence rather than as a character modifier:
-
-**iTerm2:**
-- Preferences → Profiles → Keys → General
-- Set "Left Option Key" to "Esc+"
-- Keep "Right Option Key" as "Normal" if you need to type special characters
-
-**Terminal.app:**
-- Preferences → Profiles → Keyboard
-- Check "Use Option as Meta Key"
-
-**Note for international keyboards:** If you use Option to type special characters (like @ on German layouts), only set the *Left* Option as Meta and keep the *Right* Option for character input.
+If you use Option to type special characters (like @ on German layouts), you should configure your terminal to treat only the **Left Option** as Meta/Alt, and keep the **Right Option** for character input. iTerm2 supports this configuration (see above).
 
 #### International Keyboard Layouts
 
@@ -789,29 +821,6 @@ Fresh uses a visual regression testing system to ensure that UI changes are inte
 
 ## Keybindings
 
-| Action                 | Key                   |
-| ---------------------- | --------------------- |
-| **General**            |
-| Command Palette        | `Ctrl+P`              |
-| Show Keybindings       | `Ctrl+H`              |
-| **File**               |
-| Open File              | `Ctrl+O`              |
-| Save File              | `Ctrl+S`              |
-| **Editing**            |
-| Undo                   | `Ctrl+Z`              |
-| Redo                   | `Ctrl+Y`              |
-| Select Next Occurrence | `Ctrl+D`              |
-| **Navigation**         |
-| Go to Definition       | Command Palette       |
-| Back                   | `Alt+Left`            |
-| Forward                | `Alt+Right`           |
-| **Layout**             |
-| Split Horizontal       | `Alt+H`               |
-| Split Vertical         | `Alt+V`               |
-| Next Split             | `Alt+O`               |
-| File Explorer          | `Ctrl+E`              |
-| **Terminal**           |
-| Toggle Terminal Mode   | `Ctrl+Space`          |
-| Exit Terminal Mode     | `Ctrl+]`              |
-| Toggle Keyboard Capture| `F9`                  |
-| Paste in Terminal      | `Ctrl+V`              |
+Open command palette (Ctrl+P or ^P) and type the name of the command you want to run - if any keybinding is assigned, it will also be shown.
+
+Alternatively, use Help -> Keyboard Shortcuts to view the full list.
