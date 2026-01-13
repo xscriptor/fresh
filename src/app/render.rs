@@ -24,17 +24,27 @@ impl Editor {
 
         // Prepare all buffers for rendering (pre-load viewport data for lazy loading)
         // Each split may have a different viewport position on the same buffer
-        let mut semantic_targets = std::collections::HashSet::new();
-        let mut buffers_to_request = Vec::new();
-        for split_id in self.split_view_states.keys() {
+        let mut semantic_ranges: std::collections::HashMap<BufferId, (usize, usize)> =
+            std::collections::HashMap::new();
+        for (split_id, view_state) in &self.split_view_states {
             if let Some(buffer_id) = self.split_manager.get_buffer_id(*split_id) {
-                if semantic_targets.insert(buffer_id) {
-                    buffers_to_request.push(buffer_id);
+                if let Some(state) = self.buffers.get(&buffer_id) {
+                    let start_line = state.buffer.get_line_number(view_state.viewport.top_byte);
+                    let visible_lines = view_state.viewport.visible_line_count().saturating_sub(1);
+                    let end_line = start_line.saturating_add(visible_lines);
+                    semantic_ranges
+                        .entry(buffer_id)
+                        .and_modify(|(min_start, max_end)| {
+                            *min_start = (*min_start).min(start_line);
+                            *max_end = (*max_end).max(end_line);
+                        })
+                        .or_insert((start_line, end_line));
                 }
             }
         }
-        for buffer_id in buffers_to_request {
-            self.maybe_request_semantic_tokens(buffer_id);
+        for (buffer_id, (start_line, end_line)) in semantic_ranges {
+            self.maybe_request_semantic_tokens_range(buffer_id, start_line, end_line);
+            self.maybe_request_semantic_tokens_full_debounced(buffer_id);
         }
 
         for (split_id, view_state) in &self.split_view_states {
@@ -52,7 +62,7 @@ impl Editor {
 
         // Refresh search highlights only during incremental search (when prompt is active)
         // After search is confirmed, overlays exist for ALL matches and shouldn't be overwritten
-        let is_search_prompt_active = self.prompt.as_ref().map_or(false, |p| {
+        let is_search_prompt_active = self.prompt.as_ref().is_some_and(|p| {
             matches!(
                 p.prompt_type,
                 PromptType::Search | PromptType::ReplaceSearch | PromptType::QueryReplaceSearch
@@ -66,7 +76,7 @@ impl Editor {
         }
 
         // Determine if we need to show search options bar
-        let show_search_options = self.prompt.as_ref().map_or(false, |p| {
+        let show_search_options = self.prompt.as_ref().is_some_and(|p| {
             matches!(
                 p.prompt_type,
                 PromptType::Search
@@ -81,8 +91,8 @@ impl Editor {
         let has_suggestions = self
             .prompt
             .as_ref()
-            .map_or(false, |p| !p.suggestions.is_empty());
-        let has_file_browser = self.prompt.as_ref().map_or(false, |p| {
+            .is_some_and(|p| !p.suggestions.is_empty());
+        let has_file_browser = self.prompt.as_ref().is_some_and(|p| {
             matches!(
                 p.prompt_type,
                 PromptType::OpenFile | PromptType::SwitchProject | PromptType::SaveFileAs
@@ -168,6 +178,7 @@ impl Editor {
                     horizontal_chunks[0],
                     is_focused,
                     &files_with_unsaved_changes,
+                    &self.file_explorer_decoration_cache,
                     &self.keybindings,
                     self.key_context,
                     &self.theme,
@@ -244,10 +255,7 @@ impl Editor {
                     let top_byte = viewport_top_byte;
 
                     // Get or create the seen byte ranges set for this buffer
-                    let seen_byte_ranges = self
-                        .seen_byte_ranges
-                        .entry(buffer_id)
-                        .or_insert_with(std::collections::HashSet::new);
+                    let seen_byte_ranges = self.seen_byte_ranges.entry(buffer_id).or_default();
 
                     // Collect only NEW lines (not seen before based on byte range)
                     let mut new_lines: Vec<crate::services::plugins::hooks::LineInfo> = Vec::new();
@@ -257,7 +265,7 @@ impl Editor {
                         .line_iterator(top_byte, self.config.editor.estimated_line_length);
 
                     for _ in 0..visible_count {
-                        if let Some((line_start, line_content)) = iter.next() {
+                        if let Some((line_start, line_content)) = iter.next_line() {
                             let byte_end = line_start + line_content.len();
                             let byte_range = (line_start, byte_end);
 
@@ -317,7 +325,7 @@ impl Editor {
         // (terminal mode renders its own cursor via the terminal emulator)
         // (settings UI is a modal that doesn't need the editor cursor)
         // This also causes visual cursor indicators in the editor to be dimmed
-        let settings_visible = self.settings_state.as_ref().map_or(false, |s| s.visible);
+        let settings_visible = self.settings_state.as_ref().is_some_and(|s| s.visible);
         let hide_cursor = self.menu_state.active_menu.is_some()
             || self.key_context == KeyContext::FileExplorer
             || self.terminal_mode
@@ -1223,7 +1231,7 @@ impl Editor {
             .all()
             .last()
             .map(|o| o.handle.clone())
-            .unwrap_or_else(crate::view::overlay::OverlayHandle::new)
+            .unwrap_or_default()
     }
 
     /// Remove an overlay by handle
@@ -1445,7 +1453,7 @@ impl Editor {
                 // Notify LSP about the current file
                 self.notify_lsp_current_file_opened(&language);
             }
-            "deny" | _ => {
+            _ => {
                 // User declined - don't start the server
                 tracing::info!("LSP server for {} startup declined by user", language);
                 self.set_status_message(
@@ -1980,7 +1988,7 @@ impl Editor {
         {
             let mut line_iter = state.buffer.line_iterator(top_byte, 80);
             for _ in 0..visible_height {
-                if let Some((line_start, line_content)) = line_iter.next() {
+                if let Some((line_start, line_content)) = line_iter.next_line() {
                     visible_end = line_start + line_content.len();
                 } else {
                     break;
@@ -2392,10 +2400,10 @@ impl Editor {
                     // Only call find_next if:
                     // 1. We started at a match AND landed back at it, OR
                     // 2. We didn't move at all
-                    if (started_at_match && landed_at_start) || cursor_before == cursor_after {
-                        if search_state.matches.len() > 1 {
-                            self.find_next();
-                        }
+                    if ((started_at_match && landed_at_start) || cursor_before == cursor_after)
+                        && search_state.matches.len() > 1
+                    {
+                        self.find_next();
                     }
                 }
             }
@@ -2704,17 +2712,13 @@ impl Editor {
                     let mut current_pos = ir_state.current_match_pos + ir_state.search.len();
 
                     // Find all remaining matches
-                    loop {
-                        if let Some((next_match, wrapped)) =
-                            self.find_next_match_for_replace(&temp_state, current_pos)
-                        {
-                            matches.push(next_match);
-                            current_pos = next_match + temp_state.search.len();
-                            if wrapped {
-                                temp_state.has_wrapped = true;
-                            }
-                        } else {
-                            break;
+                    while let Some((next_match, wrapped)) =
+                        self.find_next_match_for_replace(&temp_state, current_pos)
+                    {
+                        matches.push(next_match);
+                        current_pos = next_match + temp_state.search.len();
+                        if wrapped {
+                            temp_state.has_wrapped = true;
                         }
                     }
                     matches
@@ -2831,7 +2835,7 @@ impl Editor {
 
         // Capture current cursor state for undo
         let cursor_id = self.active_state().cursors.primary_id();
-        let cursor = self.active_state().cursors.get(cursor_id).unwrap().clone();
+        let cursor = *self.active_state().cursors.get(cursor_id).unwrap();
         let old_position = cursor.position;
         let old_anchor = cursor.anchor;
         let old_sticky_column = cursor.sticky_column;
@@ -2926,14 +2930,14 @@ impl Editor {
     pub(super) fn smart_home(&mut self) {
         let estimated_line_length = self.config.editor.estimated_line_length;
         let state = self.active_state_mut();
-        let cursor = state.cursors.primary().clone();
+        let cursor = *state.cursors.primary();
         let cursor_id = state.cursors.primary_id();
 
         // Get line information
         let mut iter = state
             .buffer
             .line_iterator(cursor.position, estimated_line_length);
-        if let Some((line_start, line_content)) = iter.next() {
+        if let Some((line_start, line_content)) = iter.next_line() {
             // Find first non-whitespace character
             let first_non_ws = line_content
                 .chars()
@@ -2991,7 +2995,7 @@ impl Editor {
         let estimated_line_length = self.config.editor.estimated_line_length;
 
         let state = self.active_state_mut();
-        let cursor = state.cursors.primary().clone();
+        let cursor = *state.cursors.primary();
         let cursor_id = state.cursors.primary_id();
 
         // Save original selection info to restore after edit
@@ -3016,25 +3020,21 @@ impl Editor {
         let mut current_pos = iter.current_position();
         line_starts.push(current_pos);
 
-        loop {
-            if let Some((_, content)) = iter.next() {
-                current_pos += content.len();
-                if current_pos >= end_pos || current_pos >= buffer_len {
-                    break;
-                }
-                let next_iter = state
-                    .buffer
-                    .line_iterator(current_pos, estimated_line_length);
-                let next_start = next_iter.current_position();
-                if next_start != *line_starts.last().unwrap() {
-                    line_starts.push(next_start);
-                }
-                iter = state
-                    .buffer
-                    .line_iterator(current_pos, estimated_line_length);
-            } else {
+        while let Some((_, content)) = iter.next_line() {
+            current_pos += content.len();
+            if current_pos >= end_pos || current_pos >= buffer_len {
                 break;
             }
+            let next_iter = state
+                .buffer
+                .line_iterator(current_pos, estimated_line_length);
+            let next_start = next_iter.current_position();
+            if next_start != *line_starts.last().unwrap() {
+                line_starts.push(next_start);
+            }
+            iter = state
+                .buffer
+                .line_iterator(current_pos, estimated_line_length);
         }
 
         // Determine if we should comment or uncomment
@@ -3162,7 +3162,7 @@ impl Editor {
     /// Go to matching bracket
     pub(super) fn goto_matching_bracket(&mut self) {
         let state = self.active_state_mut();
-        let cursor = state.cursors.primary().clone();
+        let cursor = *state.cursors.primary();
         let cursor_id = state.cursors.primary_id();
 
         let pos = cursor.position;
@@ -3263,7 +3263,7 @@ impl Editor {
         let state = self.active_state_mut();
         let cursor_pos = state.cursors.primary().position;
         let cursor_id = state.cursors.primary_id();
-        let cursor = state.cursors.primary().clone();
+        let cursor = *state.cursors.primary();
 
         // Get all diagnostic overlay positions
         let mut diagnostic_positions: Vec<usize> = state
@@ -3330,7 +3330,7 @@ impl Editor {
         let state = self.active_state_mut();
         let cursor_pos = state.cursors.primary().position;
         let cursor_id = state.cursors.primary_id();
-        let cursor = state.cursors.primary().clone();
+        let cursor = *state.cursors.primary();
 
         // Get all diagnostic overlay positions
         let mut diagnostic_positions: Vec<usize> = state
@@ -3487,6 +3487,11 @@ impl Editor {
 
     /// Play back a recorded macro
     pub(super) fn play_macro(&mut self, key: char) {
+        // Prevent recursive macro playback
+        if self.macro_playing {
+            return;
+        }
+
         if let Some(actions) = self.macros.get(&key).cloned() {
             if actions.is_empty() {
                 self.set_status_message(t!("macro.empty", key = key).to_string());
@@ -3495,14 +3500,16 @@ impl Editor {
 
             // Temporarily disable recording to avoid recording the playback
             let was_recording = self.macro_recording.take();
+            self.macro_playing = true;
 
             let action_count = actions.len();
             for action in actions {
                 let _ = self.handle_action(action);
             }
 
-            // Restore recording state
+            // Restore recording and playing state
             self.macro_recording = was_recording;
+            self.macro_playing = false;
 
             self.set_status_message(
                 t!("macro.played", key = key, count = action_count).to_string(),
@@ -3526,6 +3533,16 @@ impl Editor {
                 | Action::PromptRecordMacro
                 | Action::PromptPlayMacro
                 | Action::PlayLastMacro => {}
+                // When recording PromptConfirm, capture the current prompt text
+                // so it can be replayed correctly
+                Action::PromptConfirm => {
+                    if let Some(prompt) = &self.prompt {
+                        let text = prompt.get_text().to_string();
+                        state.actions.push(Action::PromptConfirmWithText(text));
+                    } else {
+                        state.actions.push(action.clone());
+                    }
+                }
                 _ => {
                     state.actions.push(action.clone());
                 }
@@ -3568,8 +3585,8 @@ impl Editor {
         self.next_buffer_id += 1;
 
         let mut state = EditorState::new(
-            self.terminal_width.into(),
-            self.terminal_height.into(),
+            self.terminal_width,
+            self.terminal_height,
             self.config.editor.large_file_threshold_bytes as usize,
         );
         state
@@ -3599,6 +3616,7 @@ impl Editor {
             binary: false,
             lsp_opened_with: std::collections::HashSet::new(),
             hidden_from_tabs: false,
+            recovery_id: None,
         };
         self.buffer_metadata.insert(buffer_id, metadata);
 
@@ -3627,12 +3645,9 @@ impl Editor {
             if let Some(actions) = self.macros.get(&key) {
                 content.push_str(&format!("Macro '{}': {} actions\n", key, actions.len()));
 
-                // Show first few actions as preview
-                for (i, action) in actions.iter().take(5).enumerate() {
+                // Show all actions
+                for (i, action) in actions.iter().enumerate() {
                     content.push_str(&format!("  {}. {:?}\n", i + 1, action));
-                }
-                if actions.len() > 5 {
-                    content.push_str(&format!("  ... and {} more actions\n", actions.len() - 5));
                 }
                 content.push('\n');
             }
@@ -3643,8 +3658,8 @@ impl Editor {
         self.next_buffer_id += 1;
 
         let mut state = EditorState::new(
-            self.terminal_width.into(),
-            self.terminal_height.into(),
+            self.terminal_width,
+            self.terminal_height,
             self.config.editor.large_file_threshold_bytes as usize,
         );
         state
@@ -3674,6 +3689,7 @@ impl Editor {
             binary: false,
             lsp_opened_with: std::collections::HashSet::new(),
             hidden_from_tabs: false,
+            recovery_id: None,
         };
         self.buffer_metadata.insert(buffer_id, metadata);
 

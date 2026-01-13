@@ -71,6 +71,8 @@ Or, pick your preferred method:
 
 On macOS and some linux distros (Bazzite/Bluefin/Aurora):
 
+> **Note:** On macOS, see [macOS Terminal Tips](docs/USER_GUIDE.md#macos-terminal-tips) for recommended terminal configuration.
+
 ```bash
 brew tap sinelaw/fresh
 brew install fresh-editor
@@ -240,6 +242,12 @@ Thanks for contributing!
 7. **LSP**: Ensure LSP interactions follow the correct lifecycle (e.g., `didOpen` must always precede other requests to avoid server-side errors). Use the appropriate existing helpers for this pattern.
 
 **Tip**: You can use tmux + send-keys + render-pane to script ad-hoc tests on the UI, for example when trying to reproduce an issue.
+
+## Privacy
+
+Fresh checks for new versions daily to notify you of available upgrades. Alongside this, it sends basic anonymous telemetry (version, OS/architecture, terminal type) to help understand usage patterns. No personal data or file contents are collected.
+
+To disable both upgrade checks and telemetry, use `--no-upgrade-check` or set `check_for_updates: false` in your config.
 
 ## License
 

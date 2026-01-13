@@ -319,10 +319,11 @@ fn test_switch_project_backspace_goes_parent() {
     let temp_dir = TempDir::new().unwrap();
     let project_root = temp_dir.path().to_path_buf();
 
-    // Create nested structure
+    // Create nested structure with a file in each directory
     let subdir = project_root.join("nested");
     fs::create_dir(&subdir).unwrap();
     fs::write(project_root.join("root_file.txt"), "root").unwrap();
+    fs::write(subdir.join("nested_file.txt"), "nested").unwrap();
 
     let mut harness = EditorTestHarness::with_config_and_working_dir(
         80,
@@ -345,10 +346,14 @@ fn test_switch_project_backspace_goes_parent() {
         .send_key(KeyCode::Enter, KeyModifiers::NONE)
         .unwrap();
 
-    // Wait for folder browser
+    // Wait for folder browser to fully load (both UI and directory contents)
+    // The nested directory contains nested_file.txt which we wait for
     harness
-        .wait_until(|h| h.screen_to_string().contains("Navigation:"))
-        .expect("Folder browser should appear");
+        .wait_until(|h| {
+            let screen = h.screen_to_string();
+            screen.contains("Navigation:") && screen.contains("nested_file.txt")
+        })
+        .expect("Folder browser should appear with nested directory contents");
 
     // Press backspace to go to parent
     harness

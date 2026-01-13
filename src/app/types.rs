@@ -111,6 +111,11 @@ pub struct BufferMetadata {
 
     /// Whether this buffer should be hidden from tabs (used for composite source buffers)
     pub hidden_from_tabs: bool,
+
+    /// Stable recovery ID for unnamed buffers.
+    /// For file-backed buffers, recovery ID is computed from the path hash.
+    /// For unnamed buffers, this is generated once and reused across auto-saves.
+    pub recovery_id: Option<String>,
 }
 
 impl BufferMetadata {
@@ -144,6 +149,12 @@ impl BufferMetadata {
     }
 }
 
+impl Default for BufferMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BufferMetadata {
     /// Create new metadata for a buffer (unnamed, file-backed)
     pub fn new() -> Self {
@@ -159,6 +170,7 @@ impl BufferMetadata {
             binary: false,
             lsp_opened_with: HashSet::new(),
             hidden_from_tabs: false,
+            recovery_id: None,
         }
     }
 
@@ -177,6 +189,7 @@ impl BufferMetadata {
             binary: false,
             lsp_opened_with: HashSet::new(),
             hidden_from_tabs: false,
+            recovery_id: None,
         }
     }
 
@@ -207,6 +220,7 @@ impl BufferMetadata {
             binary: false,
             lsp_opened_with: HashSet::new(),
             hidden_from_tabs: false,
+            recovery_id: None,
         }
     }
 
@@ -256,6 +270,7 @@ impl BufferMetadata {
             binary: false,
             lsp_opened_with: HashSet::new(),
             hidden_from_tabs: false,
+            recovery_id: None,
         }
     }
 
@@ -272,6 +287,7 @@ impl BufferMetadata {
             binary: false,
             lsp_opened_with: HashSet::new(),
             hidden_from_tabs: true,
+            recovery_id: None,
         }
     }
 
@@ -588,6 +604,10 @@ impl ViewLineMapping {
     }
 }
 
+/// Type alias for popup area layout information used in mouse hit testing.
+/// Fields: (popup_index, rect, inner_rect, scroll_offset, num_items, scrollbar_rect, total_lines)
+pub(crate) type PopupAreaLayout = (usize, Rect, Rect, usize, usize, Option<Rect>, usize);
+
 /// Cached layout information for mouse hit testing
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CachedLayout {
@@ -602,9 +622,8 @@ pub(crate) struct CachedLayout {
     /// (split_id, direction, x, y, length)
     pub separator_areas: Vec<(SplitId, SplitDirection, u16, u16, u16)>,
     /// Popup areas for mouse hit testing
-    /// (popup_index, rect, inner_rect, scroll_offset, num_items, scrollbar_rect, total_lines)
     /// scrollbar_rect is Some if popup has a scrollbar
-    pub popup_areas: Vec<(usize, Rect, Rect, usize, usize, Option<Rect>, usize)>,
+    pub popup_areas: Vec<PopupAreaLayout>,
     /// Suggestions area for mouse hit testing
     /// (inner_rect, scroll_start_idx, visible_count, total_count)
     pub suggestions_area: Option<(Rect, usize, usize, usize)>,

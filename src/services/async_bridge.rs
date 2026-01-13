@@ -13,11 +13,20 @@
 use crate::services::terminal::TerminalId;
 use crate::view::file_tree::{FileTreeView, NodeId};
 use lsp_types::{
-    CodeActionOrCommand, CompletionItem, Diagnostic, InlayHint, Location, SemanticTokensLegend,
+    CodeActionOrCommand, CompletionItem, Diagnostic, InlayHint, Location,
+    SemanticTokensFullDeltaResult, SemanticTokensLegend, SemanticTokensRangeResult,
     SemanticTokensResult, SignatureHelp,
 };
 use serde_json::Value;
 use std::sync::mpsc;
+
+/// Semantic token responses grouped by request type.
+#[derive(Debug)]
+pub enum LspSemanticTokensResponse {
+    Full(Result<Option<SemanticTokensResult>, String>),
+    FullDelta(Result<Option<SemanticTokensFullDeltaResult>, String>),
+    Range(Result<Option<SemanticTokensRangeResult>, String>),
+}
 
 /// Messages sent from async tasks to the synchronous main loop
 #[derive(Debug)]
@@ -37,6 +46,10 @@ pub enum AsyncMessage {
         semantic_tokens_legend: Option<SemanticTokensLegend>,
         /// Whether the server supports full document semantic tokens
         semantic_tokens_full: bool,
+        /// Whether the server supports full document semantic token deltas
+        semantic_tokens_full_delta: bool,
+        /// Whether the server supports range semantic tokens
+        semantic_tokens_range: bool,
     },
 
     /// LSP server crashed or failed
@@ -115,11 +128,11 @@ pub enum AsyncMessage {
         hints: Vec<InlayHint>,
     },
 
-    /// LSP semantic tokens response (textDocument/semanticTokens/full)
+    /// LSP semantic tokens response (full, full/delta, or range)
     LspSemanticTokens {
         request_id: u64,
         uri: String,
-        result: Result<Option<SemanticTokensResult>, String>,
+        response: LspSemanticTokensResponse,
     },
 
     /// LSP server status became quiescent (project fully loaded)
@@ -342,6 +355,8 @@ mod tests {
                 completion_trigger_characters: vec![".".to_string()],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
 
@@ -374,6 +389,8 @@ mod tests {
                 completion_trigger_characters: vec![],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
         sender
@@ -382,6 +399,8 @@ mod tests {
                 completion_trigger_characters: vec![],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
 
@@ -412,6 +431,8 @@ mod tests {
                 completion_trigger_characters: vec![],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
         sender2
@@ -420,6 +441,8 @@ mod tests {
                 completion_trigger_characters: vec![],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
 
@@ -520,6 +543,8 @@ mod tests {
                 completion_trigger_characters: vec![],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
 
@@ -539,6 +564,8 @@ mod tests {
                 completion_trigger_characters: vec![],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
 
@@ -563,6 +590,8 @@ mod tests {
                 completion_trigger_characters: vec![],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
         sender
@@ -571,6 +600,8 @@ mod tests {
                 completion_trigger_characters: vec![],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
         sender
@@ -579,6 +610,8 @@ mod tests {
                 completion_trigger_characters: vec![],
                 semantic_tokens_legend: None,
                 semantic_tokens_full: false,
+                semantic_tokens_full_delta: false,
+                semantic_tokens_range: false,
             })
             .unwrap();
 

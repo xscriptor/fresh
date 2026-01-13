@@ -43,6 +43,11 @@ pub struct EntryDialogState {
     pub hover_button: Option<usize>,
     /// Original value when dialog was opened (for Cancel to restore)
     pub original_value: Value,
+    /// Index of first editable item (items before this are read-only)
+    /// Used for rendering separator and focus navigation
+    pub first_editable_index: usize,
+    /// Whether deletion is disabled (for auto-managed entries like plugins)
+    pub no_delete: bool,
 }
 
 impl EntryDialogState {
@@ -57,10 +62,11 @@ impl EntryDialogState {
         schema: &SettingSchema,
         map_path: &str,
         is_new: bool,
+        no_delete: bool,
     ) -> Self {
         let mut items = Vec::new();
 
-        // Add key field as first item (editable text input)
+        // Add key field as first item (read-only for existing entries)
         let key_item = SettingItem {
             path: "__key__".to_string(),
             name: "Key".to_string(),
@@ -68,6 +74,9 @@ impl EntryDialogState {
             control: SettingControl::Text(TextInputState::new("Key").with_value(&key)),
             default: None,
             modified: false,
+            layer_source: crate::config_io::ConfigLayer::System,
+            read_only: !is_new, // Key is editable only for new entries
+            is_auto_managed: false,
         };
         items.push(key_item);
 
@@ -81,6 +90,23 @@ impl EntryDialogState {
             }
         }
 
+        // Sort items: read-only first, then editable
+        items.sort_by_key(|item| !item.read_only);
+
+        // Find the first editable item index
+        let first_editable_index = items
+            .iter()
+            .position(|item| !item.read_only)
+            .unwrap_or(items.len());
+
+        // If all items are read-only, start with focus on buttons
+        let focus_on_buttons = first_editable_index >= items.len();
+        let selected_item = if focus_on_buttons {
+            0
+        } else {
+            first_editable_index
+        };
+
         let title = if is_new {
             format!("Add {}", schema.name)
         } else {
@@ -93,17 +119,19 @@ impl EntryDialogState {
             title,
             is_new,
             items,
-            selected_item: 0,
+            selected_item,
             sub_focus: None,
             editing_text: false,
             focused_button: 0,
-            focus_on_buttons: false,
+            focus_on_buttons,
             delete_requested: false,
             scroll_offset: 0,
             viewport_height: 20, // Default, updated during render
             hover_item: None,
             hover_button: None,
             original_value: value.clone(),
+            first_editable_index,
+            no_delete,
         }
     }
 
@@ -129,6 +157,23 @@ impl EntryDialogState {
             }
         }
 
+        // Sort items: read-only first, then editable
+        items.sort_by_key(|item| !item.read_only);
+
+        // Find the first editable item index
+        let first_editable_index = items
+            .iter()
+            .position(|item| !item.read_only)
+            .unwrap_or(items.len());
+
+        // If all items are read-only, start with focus on buttons
+        let focus_on_buttons = first_editable_index >= items.len();
+        let selected_item = if focus_on_buttons {
+            0
+        } else {
+            first_editable_index
+        };
+
         let title = if is_new {
             format!("Add {}", schema.name)
         } else {
@@ -141,23 +186,26 @@ impl EntryDialogState {
             title,
             is_new,
             items,
-            selected_item: 0,
+            selected_item,
             sub_focus: None,
             editing_text: false,
             focused_button: 0,
-            focus_on_buttons: false,
+            focus_on_buttons,
             delete_requested: false,
             scroll_offset: 0,
             viewport_height: 20,
             hover_item: None,
             hover_button: None,
             original_value: value.clone(),
+            first_editable_index,
+            no_delete: false, // Arrays typically allow deletion
         }
     }
 
     /// Get the current key value from the key item
     pub fn get_key(&self) -> String {
-        if let Some(item) = self.items.first() {
+        // Find the key item by path (may not be first after sorting)
+        for item in &self.items {
             if item.path == "__key__" {
                 if let SettingControl::Text(state) = &item.control {
                     return state.value.clone();
@@ -167,10 +215,10 @@ impl EntryDialogState {
         self.entry_key.clone()
     }
 
-    /// Get button count (3 for existing entries with Delete, 2 for new entries)
+    /// Get button count (3 for existing entries with Delete, 2 for new/no_delete entries)
     pub fn button_count(&self) -> usize {
-        if self.is_new {
-            2
+        if self.is_new || self.no_delete {
+            2 // Save, Cancel (no Delete for new entries or when no_delete is set)
         } else {
             3
         }
@@ -223,37 +271,36 @@ impl EntryDialogState {
                 // Move to next button
                 self.focused_button += 1;
             } else {
-                // Wrap to first item
-                self.focus_on_buttons = false;
-                self.selected_item = 0;
+                // Wrap to first editable item (skip read-only items)
+                if self.first_editable_index < self.items.len() {
+                    self.focus_on_buttons = false;
+                    self.selected_item = self.first_editable_index;
+                }
+                // If all items are read-only, stay on buttons (don't wrap)
             }
         } else {
             // Check if current item is an ObjectArray that can navigate internally
-            let array_nav_result = self
-                .items
-                .get(self.selected_item)
-                .map(|item| {
-                    if let SettingControl::ObjectArray(state) = &item.control {
-                        // Navigation order: entries -> add-new -> exit
-                        match state.focused_index {
-                            Some(idx) if idx + 1 < state.bindings.len() => {
-                                // On entry, can go to next entry
-                                Some(true)
-                            }
-                            Some(_) => {
-                                // On last entry, can go to add-new
-                                Some(true)
-                            }
-                            None => {
-                                // On add-new, exit to next dialog item
-                                Some(false)
-                            }
+            let array_nav_result = self.items.get(self.selected_item).and_then(|item| {
+                if let SettingControl::ObjectArray(state) = &item.control {
+                    // Navigation order: entries -> add-new -> exit
+                    match state.focused_index {
+                        Some(idx) if idx + 1 < state.bindings.len() => {
+                            // On entry, can go to next entry
+                            Some(true)
                         }
-                    } else {
-                        None
+                        Some(_) => {
+                            // On last entry, can go to add-new
+                            Some(true)
+                        }
+                        None => {
+                            // On add-new, exit to next dialog item
+                            Some(false)
+                        }
                     }
-                })
-                .flatten();
+                } else {
+                    None
+                }
+            });
 
             match array_nav_result {
                 Some(true) => {
@@ -278,6 +325,7 @@ impl EntryDialogState {
                 }
                 None => {
                     // Not an ObjectArray, normal navigation
+                    // All items after first_editable_index are editable (sorted)
                     if self.selected_item + 1 < self.items.len() {
                         self.selected_item += 1;
                         self.sub_focus = None;
@@ -305,41 +353,40 @@ impl EntryDialogState {
             if self.focused_button > 0 {
                 self.focused_button -= 1;
             } else {
-                // Move back to items
-                self.focus_on_buttons = false;
-                self.selected_item = self.items.len().saturating_sub(1);
+                // Move back to last editable item
+                if self.first_editable_index < self.items.len() {
+                    self.focus_on_buttons = false;
+                    self.selected_item = self.items.len().saturating_sub(1);
+                }
+                // If all items are read-only, stay on buttons (don't wrap)
             }
         } else {
             // Check if current item is an ObjectArray that can navigate internally
-            let array_nav_result = self
-                .items
-                .get(self.selected_item)
-                .map(|item| {
-                    if let SettingControl::ObjectArray(state) = &item.control {
-                        // Navigation order (reverse): exit <- entries <- add-new
-                        match state.focused_index {
-                            None => {
-                                // On add-new, can go back to last entry (if any)
-                                if !state.bindings.is_empty() {
-                                    Some(true)
-                                } else {
-                                    Some(false) // No entries, exit
-                                }
-                            }
-                            Some(0) => {
-                                // On first entry, exit to previous dialog item
-                                Some(false)
-                            }
-                            Some(_) => {
-                                // On entry, can go to previous entry
+            let array_nav_result = self.items.get(self.selected_item).and_then(|item| {
+                if let SettingControl::ObjectArray(state) = &item.control {
+                    // Navigation order (reverse): exit <- entries <- add-new
+                    match state.focused_index {
+                        None => {
+                            // On add-new, can go back to last entry (if any)
+                            if !state.bindings.is_empty() {
                                 Some(true)
+                            } else {
+                                Some(false) // No entries, exit
                             }
                         }
-                    } else {
-                        None
+                        Some(0) => {
+                            // On first entry, exit to previous dialog item
+                            Some(false)
+                        }
+                        Some(_) => {
+                            // On entry, can go to previous entry
+                            Some(true)
+                        }
                     }
-                })
-                .flatten();
+                } else {
+                    None
+                }
+            });
 
             match array_nav_result {
                 Some(true) => {
@@ -351,25 +398,28 @@ impl EntryDialogState {
                     }
                 }
                 Some(false) => {
-                    // Exit ObjectArray, go to previous item
-                    if self.selected_item > 0 {
+                    // Exit ObjectArray, go to previous editable item (not into read-only)
+                    if self.selected_item > self.first_editable_index {
                         self.selected_item -= 1;
                         self.sub_focus = None;
                         // Initialize previous item's ObjectArray to add-new (end)
                         self.init_object_array_focus_end();
                     } else {
+                        // At first editable item, go to buttons
                         self.focus_on_buttons = true;
                         self.focused_button = self.button_count().saturating_sub(1);
                     }
                 }
                 None => {
                     // Not an ObjectArray, normal navigation
-                    if self.selected_item > 0 {
+                    // Don't go below first_editable_index (read-only items)
+                    if self.selected_item > self.first_editable_index {
                         self.selected_item -= 1;
                         self.sub_focus = None;
                         // Initialize previous item's ObjectArray to add-new (end)
                         self.init_object_array_focus_end();
                     } else {
+                        // At first editable item, go to buttons
                         self.focus_on_buttons = true;
                         self.focused_button = self.button_count().saturating_sub(1);
                     }
@@ -465,21 +515,41 @@ impl EntryDialogState {
         }
     }
 
-    /// Calculate total content height for all items
+    /// Calculate total content height for all items (including separator)
     pub fn total_content_height(&self) -> usize {
-        self.items
+        let items_height: usize = self
+            .items
             .iter()
             .map(|item| item.control.control_height() as usize)
-            .sum()
+            .sum();
+        // Add 1 for separator if we have both read-only and editable items
+        let separator_height =
+            if self.first_editable_index > 0 && self.first_editable_index < self.items.len() {
+                1
+            } else {
+                0
+            };
+        items_height + separator_height
     }
 
-    /// Calculate the Y offset of the selected item
+    /// Calculate the Y offset of the selected item (including separator)
     pub fn selected_item_offset(&self) -> usize {
-        self.items
+        let items_offset: usize = self
+            .items
             .iter()
             .take(self.selected_item)
             .map(|item| item.control.control_height() as usize)
-            .sum()
+            .sum();
+        // Add 1 for separator if selected item is after it
+        let separator_offset = if self.first_editable_index > 0
+            && self.first_editable_index < self.items.len()
+            && self.selected_item >= self.first_editable_index
+        {
+            1
+        } else {
+            0
+        };
+        items_offset + separator_offset
     }
 
     /// Calculate the height of the selected item
@@ -578,6 +648,10 @@ impl EntryDialogState {
     /// Start text editing mode for the current control
     pub fn start_editing(&mut self) {
         if let Some(item) = self.current_item_mut() {
+            // Don't allow editing read-only fields
+            if item.read_only {
+                return;
+            }
             match &mut item.control {
                 SettingControl::Text(state) => {
                     // TextInputState uses focus state, cursor is already at end from with_value
@@ -605,11 +679,8 @@ impl EntryDialogState {
     /// Stop text editing mode
     pub fn stop_editing(&mut self) {
         if let Some(item) = self.current_item_mut() {
-            match &mut item.control {
-                SettingControl::Number(state) => {
-                    state.cancel_editing();
-                }
-                _ => {}
+            if let SettingControl::Number(state) = &mut item.control {
+                state.cancel_editing();
             }
         }
         self.editing_text = false;
@@ -841,6 +912,10 @@ impl EntryDialogState {
     /// Toggle boolean value
     pub fn toggle_bool(&mut self) {
         if let Some(item) = self.current_item_mut() {
+            // Don't allow toggling read-only fields
+            if item.read_only {
+                return;
+            }
             if let SettingControl::Toggle(state) = &mut item.control {
                 state.checked = !state.checked;
             }
@@ -850,6 +925,10 @@ impl EntryDialogState {
     /// Toggle dropdown open state
     pub fn toggle_dropdown(&mut self) {
         if let Some(item) = self.current_item_mut() {
+            // Don't allow editing read-only fields
+            if item.read_only {
+                return;
+            }
             if let SettingControl::Dropdown(state) = &mut item.control {
                 state.open = !state.open;
             }
@@ -890,6 +969,10 @@ impl EntryDialogState {
     /// Increment number value
     pub fn increment_number(&mut self) {
         if let Some(item) = self.current_item_mut() {
+            // Don't allow editing read-only fields
+            if item.read_only {
+                return;
+            }
             if let SettingControl::Number(state) = &mut item.control {
                 state.increment();
             }
@@ -899,6 +982,10 @@ impl EntryDialogState {
     /// Decrement number value
     pub fn decrement_number(&mut self) {
         if let Some(item) = self.current_item_mut() {
+            // Don't allow editing read-only fields
+            if item.read_only {
+                return;
+            }
             if let SettingControl::Number(state) = &mut item.control {
                 state.decrement();
             }
@@ -1025,6 +1112,7 @@ mod tests {
                         description: Some("Enable this".to_string()),
                         setting_type: SettingType::Boolean,
                         default: Some(serde_json::json!(true)),
+                        read_only: false,
                     },
                     SettingSchema {
                         path: "/command".to_string(),
@@ -1032,10 +1120,12 @@ mod tests {
                         description: Some("Command to run".to_string()),
                         setting_type: SettingType::String,
                         default: Some(serde_json::json!("")),
+                        read_only: false,
                     },
                 ],
             },
             default: None,
+            read_only: false,
         }
     }
 
@@ -1047,6 +1137,7 @@ mod tests {
             &serde_json::json!({}),
             &schema,
             "/test",
+            false,
             false,
         );
 
@@ -1063,6 +1154,7 @@ mod tests {
             &serde_json::json!({"enabled": true, "command": "test-cmd"}),
             &schema,
             "/test",
+            false,
             false,
         );
 
@@ -1081,6 +1173,7 @@ mod tests {
             &schema,
             "/test",
             false,
+            false,
         );
 
         assert_eq!(dialog.get_key(), "mykey");
@@ -1094,6 +1187,7 @@ mod tests {
             &serde_json::json!({"enabled": true, "command": "cmd"}),
             &schema,
             "/test",
+            false,
             false,
         );
 
@@ -1110,21 +1204,34 @@ mod tests {
             &serde_json::json!({}),
             &schema,
             "/test",
-            false,
+            false, // existing entry - Key is read-only
+            false, // allow delete
         );
 
-        assert_eq!(dialog.selected_item, 0);
+        // With is_new=false, Key is read-only and sorted first
+        // Items: [Key (read-only), Enabled, Command]
+        // Focus starts at first editable item (index 1)
+        assert_eq!(dialog.first_editable_index, 1);
+        assert_eq!(dialog.selected_item, 1); // First editable (Enabled)
         assert!(!dialog.focus_on_buttons);
 
         dialog.focus_next();
-        assert_eq!(dialog.selected_item, 1);
+        assert_eq!(dialog.selected_item, 2); // Command
 
         dialog.focus_next();
-        assert_eq!(dialog.selected_item, 2);
-
-        dialog.focus_next();
-        assert!(dialog.focus_on_buttons);
+        assert!(dialog.focus_on_buttons); // No more editable items
         assert_eq!(dialog.focused_button, 0);
+
+        // Going back should skip read-only Key
+        dialog.focus_prev();
+        assert!(!dialog.focus_on_buttons);
+        assert_eq!(dialog.selected_item, 2); // Last editable (Command)
+
+        dialog.focus_prev();
+        assert_eq!(dialog.selected_item, 1); // First editable (Enabled)
+
+        dialog.focus_prev();
+        assert!(dialog.focus_on_buttons); // Wraps to buttons, not to read-only Key
     }
 
     #[test]
@@ -1137,6 +1244,7 @@ mod tests {
             &schema,
             "/test",
             true,
+            false,
         );
         assert_eq!(new_dialog.button_count(), 2); // Save, Cancel
 
@@ -1146,7 +1254,19 @@ mod tests {
             &schema,
             "/test",
             false,
+            false, // allow delete
         );
         assert_eq!(existing_dialog.button_count(), 3); // Save, Delete, Cancel
+
+        // no_delete hides the Delete button even for existing entries
+        let no_delete_dialog = EntryDialogState::from_schema(
+            "test".to_string(),
+            &serde_json::json!({}),
+            &schema,
+            "/test",
+            false,
+            true, // no delete (auto-managed entries like plugins)
+        );
+        assert_eq!(no_delete_dialog.button_count(), 2); // Save, Cancel (no Delete)
     }
 }

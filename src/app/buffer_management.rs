@@ -448,6 +448,8 @@ impl Editor {
         self.buffers.insert(buffer_id, state);
         self.event_logs
             .insert(buffer_id, crate::model::event::EventLog::new());
+        self.buffer_metadata
+            .insert(buffer_id, crate::app::types::BufferMetadata::new());
 
         // Apply line_wrap default from config to the active split
         let active_split = self.split_manager.active_split();
@@ -1048,9 +1050,16 @@ impl Editor {
         self.event_logs.remove(&id);
         self.seen_byte_ranges.remove(&id);
         self.buffer_metadata.remove(&id);
-        if let Some((request_id, _)) = self.semantic_tokens_in_flight.remove(&id) {
+        if let Some((request_id, _, _)) = self.semantic_tokens_in_flight.remove(&id) {
             self.pending_semantic_token_requests.remove(&request_id);
         }
+        if let Some((request_id, _, _, _)) = self.semantic_tokens_range_in_flight.remove(&id) {
+            self.pending_semantic_token_range_requests
+                .remove(&request_id);
+        }
+        self.semantic_tokens_range_last_request.remove(&id);
+        self.semantic_tokens_range_applied.remove(&id);
+        self.semantic_tokens_full_debounce.remove(&id);
 
         // Remove buffer from panel_ids mapping if it was a panel buffer
         // This prevents stale entries when the same panel_id is reused later

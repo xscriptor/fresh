@@ -12,7 +12,8 @@
 //! - Uses tokio channels for command/response communication
 
 use crate::services::async_bridge::{
-    AsyncBridge, AsyncMessage, LspMessageType, LspProgressValue, LspServerStatus,
+    AsyncBridge, AsyncMessage, LspMessageType, LspProgressValue, LspSemanticTokensResponse,
+    LspServerStatus,
 };
 use crate::services::process_limits::ProcessLimits;
 use lsp_types::{
@@ -227,7 +228,7 @@ fn create_client_capabilities() -> ClientCapabilities {
                 dynamic_registration: Some(true),
                 requests: SemanticTokensClientCapabilitiesRequests {
                     range: Some(true),
-                    full: Some(SemanticTokensFullOptions::Bool(true)),
+                    full: Some(SemanticTokensFullOptions::Delta { delta: Some(true) }),
                 },
                 token_types: vec![
                     SemanticTokenType::NAMESPACE,
@@ -287,7 +288,7 @@ fn create_client_capabilities() -> ClientCapabilities {
 
 fn extract_semantic_token_capability(
     capabilities: &ServerCapabilities,
-) -> (Option<SemanticTokensLegend>, bool) {
+) -> (Option<SemanticTokensLegend>, bool, bool, bool) {
     capabilities
         .semantic_tokens_provider
         .as_ref()
@@ -295,14 +296,19 @@ fn extract_semantic_token_capability(
             SemanticTokensServerCapabilities::SemanticTokensOptions(options) => (
                 Some(options.legend.clone()),
                 semantic_tokens_full_supported(&options.full),
+                semantic_tokens_full_delta_supported(&options.full),
+                options.range.unwrap_or(false),
             ),
             SemanticTokensServerCapabilities::SemanticTokensRegistrationOptions(options) => {
                 let legend = options.semantic_tokens_options.legend.clone();
                 let full = semantic_tokens_full_supported(&options.semantic_tokens_options.full);
-                (Some(legend), full)
+                let delta =
+                    semantic_tokens_full_delta_supported(&options.semantic_tokens_options.full);
+                let range = options.semantic_tokens_options.range.unwrap_or(false);
+                (Some(legend), full, delta, range)
             }
         })
-        .unwrap_or((None, false))
+        .unwrap_or((None, false, false, false))
 }
 
 fn semantic_tokens_full_supported(full: &Option<SemanticTokensFullOptions>) -> bool {
@@ -310,6 +316,13 @@ fn semantic_tokens_full_supported(full: &Option<SemanticTokensFullOptions>) -> b
         Some(SemanticTokensFullOptions::Bool(v)) => *v,
         Some(SemanticTokensFullOptions::Delta { .. }) => true,
         None => false,
+    }
+}
+
+fn semantic_tokens_full_delta_supported(full: &Option<SemanticTokensFullOptions>) -> bool {
+    match full {
+        Some(SemanticTokensFullOptions::Delta { delta }) => delta.unwrap_or(false),
+        _ => false,
     }
 }
 
@@ -421,6 +434,20 @@ enum LspCommand {
     /// Request semantic tokens for the entire document
     SemanticTokensFull { request_id: u64, uri: Uri },
 
+    /// Request semantic tokens delta for the entire document
+    SemanticTokensFullDelta {
+        request_id: u64,
+        uri: Uri,
+        previous_result_id: String,
+    },
+
+    /// Request semantic tokens for a range
+    SemanticTokensRange {
+        request_id: u64,
+        uri: Uri,
+        range: lsp_types::Range,
+    },
+
     /// Cancel a pending request
     CancelRequest {
         /// Editor's request ID to cancel
@@ -472,6 +499,7 @@ struct LspState {
 
 impl LspState {
     /// Replay pending commands that were queued before initialization
+    #[allow(clippy::type_complexity)]
     async fn replay_pending_commands(
         &mut self,
         commands: Vec<LspCommand>,
@@ -513,6 +541,37 @@ impl LspState {
                     tracing::info!("Replaying semantic tokens request for {}", uri.as_str());
                     let _ = self
                         .handle_semantic_tokens_full(request_id, uri, pending)
+                        .await;
+                }
+                LspCommand::SemanticTokensFullDelta {
+                    request_id,
+                    uri,
+                    previous_result_id,
+                } => {
+                    tracing::info!(
+                        "Replaying semantic tokens delta request for {}",
+                        uri.as_str()
+                    );
+                    let _ = self
+                        .handle_semantic_tokens_full_delta(
+                            request_id,
+                            uri,
+                            previous_result_id,
+                            pending,
+                        )
+                        .await;
+                }
+                LspCommand::SemanticTokensRange {
+                    request_id,
+                    uri,
+                    range,
+                } => {
+                    tracing::info!(
+                        "Replaying semantic tokens range request for {}",
+                        uri.as_str()
+                    );
+                    let _ = self
+                        .handle_semantic_tokens_range(request_id, uri, range, pending)
                         .await;
                 }
                 _ => {}
@@ -562,6 +621,7 @@ impl LspState {
     }
 
     /// Send request using shared pending map
+    #[allow(clippy::type_complexity)]
     async fn send_request_sequential<P: Serialize, R: for<'de> Deserialize<'de>>(
         &mut self,
         method: &str,
@@ -573,6 +633,7 @@ impl LspState {
     }
 
     /// Send request using shared pending map with optional editor request tracking
+    #[allow(clippy::type_complexity)]
     async fn send_request_sequential_tracked<P: Serialize, R: for<'de> Deserialize<'de>>(
         &mut self,
         method: &str,
@@ -624,6 +685,7 @@ impl LspState {
     }
 
     /// Handle initialize command
+    #[allow(clippy::type_complexity)]
     async fn handle_initialize_sequential(
         &mut self,
         root_uri: Option<Uri>,
@@ -643,7 +705,7 @@ impl LspState {
                     .path()
                     .as_str()
                     .split('/')
-                    .last()
+                    .next_back()
                     .unwrap_or("workspace")
                     .to_string(),
             }]
@@ -677,8 +739,12 @@ impl LspState {
             .and_then(|cp| cp.trigger_characters.clone())
             .unwrap_or_default();
 
-        let (semantic_tokens_legend, semantic_tokens_full) =
-            extract_semantic_token_capability(&result.capabilities);
+        let (
+            semantic_tokens_legend,
+            semantic_tokens_full,
+            semantic_tokens_full_delta,
+            semantic_tokens_range,
+        ) = extract_semantic_token_capability(&result.capabilities);
 
         // Notify main loop
         let _ = self.async_tx.send(AsyncMessage::LspInitialized {
@@ -686,6 +752,8 @@ impl LspState {
             completion_trigger_characters,
             semantic_tokens_legend,
             semantic_tokens_full,
+            semantic_tokens_full_delta,
+            semantic_tokens_range,
         });
 
         // Send running status
@@ -700,6 +768,7 @@ impl LspState {
     }
 
     /// Handle did_open command
+    #[allow(clippy::type_complexity)]
     async fn handle_did_open_sequential(
         &mut self,
         uri: Uri,
@@ -733,6 +802,7 @@ impl LspState {
     }
 
     /// Handle did_change command
+    #[allow(clippy::type_complexity)]
     async fn handle_did_change_sequential(
         &mut self,
         uri: Uri,
@@ -800,6 +870,7 @@ impl LspState {
     }
 
     /// Handle completion request
+    #[allow(clippy::type_complexity)]
     async fn handle_completion(
         &mut self,
         request_id: u64,
@@ -846,12 +917,9 @@ impl LspState {
                     serde_json::from_value::<lsp_types::CompletionList>(result.clone())
                 {
                     list.items
-                } else if let Ok(items) =
-                    serde_json::from_value::<Vec<lsp_types::CompletionItem>>(result)
-                {
-                    items
                 } else {
-                    vec![]
+                    serde_json::from_value::<Vec<lsp_types::CompletionItem>>(result)
+                        .unwrap_or_default()
                 };
 
                 // Send to main loop
@@ -873,6 +941,7 @@ impl LspState {
     }
 
     /// Handle go-to-definition request
+    #[allow(clippy::type_complexity)]
     async fn handle_goto_definition(
         &mut self,
         request_id: u64,
@@ -952,6 +1021,7 @@ impl LspState {
     }
 
     /// Handle rename request
+    #[allow(clippy::type_complexity)]
     async fn handle_rename(
         &mut self,
         request_id: u64,
@@ -1022,6 +1092,7 @@ impl LspState {
     }
 
     /// Handle hover documentation request
+    #[allow(clippy::type_complexity)]
     async fn handle_hover(
         &mut self,
         request_id: u64,
@@ -1142,6 +1213,7 @@ impl LspState {
     }
 
     /// Handle find references request
+    #[allow(clippy::type_complexity)]
     async fn handle_references(
         &mut self,
         request_id: u64,
@@ -1209,6 +1281,7 @@ impl LspState {
     }
 
     /// Handle signature help request
+    #[allow(clippy::type_complexity)]
     async fn handle_signature_help(
         &mut self,
         request_id: u64,
@@ -1283,6 +1356,8 @@ impl LspState {
     }
 
     /// Handle code actions request
+    #[allow(clippy::type_complexity)]
+    #[allow(clippy::too_many_arguments)]
     async fn handle_code_actions(
         &mut self,
         request_id: u64,
@@ -1365,6 +1440,7 @@ impl LspState {
     }
 
     /// Handle document diagnostic request (pull diagnostics)
+    #[allow(clippy::type_complexity)]
     async fn handle_document_diagnostic(
         &mut self,
         request_id: u64,
@@ -1491,6 +1567,8 @@ impl LspState {
     }
 
     /// Handle inlay hints request (LSP 3.17+)
+    #[allow(clippy::type_complexity)]
+    #[allow(clippy::too_many_arguments)]
     async fn handle_inlay_hints(
         &mut self,
         request_id: u64,
@@ -1568,6 +1646,7 @@ impl LspState {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     async fn handle_semantic_tokens_full(
         &mut self,
         request_id: u64,
@@ -1600,7 +1679,7 @@ impl LspState {
                 let _ = self.async_tx.send(AsyncMessage::LspSemanticTokens {
                     request_id,
                     uri: uri.as_str().to_string(),
-                    result: Ok(result),
+                    response: LspSemanticTokensResponse::Full(Ok(result)),
                 });
                 Ok(())
             }
@@ -1609,7 +1688,113 @@ impl LspState {
                 let _ = self.async_tx.send(AsyncMessage::LspSemanticTokens {
                     request_id,
                     uri: uri.as_str().to_string(),
-                    result: Err(e.clone()),
+                    response: LspSemanticTokensResponse::Full(Err(e.clone())),
+                });
+                Err(e)
+            }
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn handle_semantic_tokens_full_delta(
+        &mut self,
+        request_id: u64,
+        uri: Uri,
+        previous_result_id: String,
+        pending: &Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
+    ) -> Result<(), String> {
+        use lsp_types::{
+            request::SemanticTokensFullDeltaRequest, PartialResultParams,
+            SemanticTokensDeltaParams, SemanticTokensFullDeltaResult, TextDocumentIdentifier,
+            WorkDoneProgressParams,
+        };
+
+        tracing::trace!(
+            "LSP: semanticTokens/full/delta request for {}",
+            uri.as_str()
+        );
+
+        let params = SemanticTokensDeltaParams {
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            previous_result_id,
+        };
+
+        match self
+            .send_request_sequential_tracked::<_, Option<SemanticTokensFullDeltaResult>>(
+                SemanticTokensFullDeltaRequest::METHOD,
+                Some(params),
+                pending,
+                Some(request_id),
+            )
+            .await
+        {
+            Ok(result) => {
+                let _ = self.async_tx.send(AsyncMessage::LspSemanticTokens {
+                    request_id,
+                    uri: uri.as_str().to_string(),
+                    response: LspSemanticTokensResponse::FullDelta(Ok(result)),
+                });
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("Semantic tokens delta request failed: {}", e);
+                let _ = self.async_tx.send(AsyncMessage::LspSemanticTokens {
+                    request_id,
+                    uri: uri.as_str().to_string(),
+                    response: LspSemanticTokensResponse::FullDelta(Err(e.clone())),
+                });
+                Err(e)
+            }
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn handle_semantic_tokens_range(
+        &mut self,
+        request_id: u64,
+        uri: Uri,
+        range: lsp_types::Range,
+        pending: &Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
+    ) -> Result<(), String> {
+        use lsp_types::{
+            request::SemanticTokensRangeRequest, PartialResultParams, SemanticTokensRangeParams,
+            TextDocumentIdentifier, WorkDoneProgressParams,
+        };
+
+        tracing::trace!("LSP: semanticTokens/range request for {}", uri.as_str());
+
+        let params = SemanticTokensRangeParams {
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range,
+        };
+
+        match self
+            .send_request_sequential_tracked::<_, Option<lsp_types::SemanticTokensRangeResult>>(
+                SemanticTokensRangeRequest::METHOD,
+                Some(params),
+                pending,
+                Some(request_id),
+            )
+            .await
+        {
+            Ok(result) => {
+                let _ = self.async_tx.send(AsyncMessage::LspSemanticTokens {
+                    request_id,
+                    uri: uri.as_str().to_string(),
+                    response: LspSemanticTokensResponse::Range(Ok(result)),
+                });
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("Semantic tokens range request failed: {}", e);
+                let _ = self.async_tx.send(AsyncMessage::LspSemanticTokens {
+                    request_id,
+                    uri: uri.as_str().to_string(),
+                    response: LspSemanticTokensResponse::Range(Err(e.clone())),
                 });
                 Err(e)
             }
@@ -1617,6 +1802,7 @@ impl LspState {
     }
 
     /// Handle a plugin-initiated request by forwarding it to the server
+    #[allow(clippy::type_complexity)]
     async fn handle_plugin_request(
         &mut self,
         request_id: u64,
@@ -1869,6 +2055,8 @@ impl LspTask {
     }
 
     /// Spawn the stdout reader task that continuously reads and dispatches LSP messages
+    #[allow(clippy::type_complexity)]
+    #[allow(clippy::too_many_arguments)]
     fn spawn_stdout_reader(
         mut stdout: BufReader<ChildStdout>,
         pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
@@ -2291,7 +2479,66 @@ impl LspTask {
                                 let _ = state.async_tx.send(AsyncMessage::LspSemanticTokens {
                                     request_id,
                                     uri: uri.as_str().to_string(),
-                                    result: Err("LSP not initialized".to_string()),
+                                    response: LspSemanticTokensResponse::Full(Err(
+                                        "LSP not initialized".to_string(),
+                                    )),
+                                });
+                            }
+                        }
+                        LspCommand::SemanticTokensFullDelta {
+                            request_id,
+                            uri,
+                            previous_result_id,
+                        } => {
+                            if state.initialized {
+                                tracing::info!(
+                                    "Processing SemanticTokens delta request for {}",
+                                    uri.as_str()
+                                );
+                                let _ = state
+                                    .handle_semantic_tokens_full_delta(
+                                        request_id,
+                                        uri,
+                                        previous_result_id,
+                                        &pending,
+                                    )
+                                    .await;
+                            } else {
+                                tracing::trace!(
+                                    "LSP not initialized, cannot get semantic tokens"
+                                );
+                                let _ = state.async_tx.send(AsyncMessage::LspSemanticTokens {
+                                    request_id,
+                                    uri: uri.as_str().to_string(),
+                                    response: LspSemanticTokensResponse::FullDelta(Err(
+                                        "LSP not initialized".to_string(),
+                                    )),
+                                });
+                            }
+                        }
+                        LspCommand::SemanticTokensRange {
+                            request_id,
+                            uri,
+                            range,
+                        } => {
+                            if state.initialized {
+                                tracing::info!(
+                                    "Processing SemanticTokens range request for {}",
+                                    uri.as_str()
+                                );
+                                let _ = state
+                                    .handle_semantic_tokens_range(request_id, uri, range, &pending)
+                                    .await;
+                            } else {
+                                tracing::trace!(
+                                    "LSP not initialized, cannot get semantic tokens"
+                                );
+                                let _ = state.async_tx.send(AsyncMessage::LspSemanticTokens {
+                                    request_id,
+                                    uri: uri.as_str().to_string(),
+                                    response: LspSemanticTokensResponse::Range(Err(
+                                        "LSP not initialized".to_string(),
+                                    )),
                                 });
                             }
                         }
@@ -2377,9 +2624,9 @@ async fn read_message_from_stdout(
             break;
         }
 
-        if line.starts_with("Content-Length: ") {
+        if let Some(len_str) = line.strip_prefix("Content-Length: ") {
             content_length = Some(
-                line[16..]
+                len_str
                     .trim()
                     .parse()
                     .map_err(|e| format!("Invalid Content-Length: {}", e))?,
@@ -2405,6 +2652,7 @@ async fn read_message_from_stdout(
 }
 
 /// Standalone function to handle and dispatch messages (for reader task)
+#[allow(clippy::type_complexity)]
 async fn handle_message_dispatch(
     message: JsonRpcMessage,
     pending: &Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
@@ -2648,13 +2896,9 @@ async fn handle_notification_dispatch(
                     let token = progress
                         .get("token")
                         .and_then(|v| {
-                            if let Some(s) = v.as_str() {
-                                Some(s.to_string())
-                            } else if let Some(n) = v.as_i64() {
-                                Some(n.to_string())
-                            } else {
-                                None
-                            }
+                            v.as_str()
+                                .map(|s| s.to_string())
+                                .or_else(|| v.as_i64().map(|n| n.to_string()))
                         })
                         .unwrap_or_else(|| "unknown".to_string());
 
@@ -3092,6 +3336,7 @@ impl LspHandle {
     }
 
     /// Request code actions
+    #[allow(clippy::too_many_arguments)]
     pub fn code_actions(
         &self,
         request_id: u64,
@@ -3163,6 +3408,38 @@ impl LspHandle {
         self.command_tx
             .try_send(LspCommand::SemanticTokensFull { request_id, uri })
             .map_err(|_| "Failed to send semantic_tokens command".to_string())
+    }
+
+    /// Request semantic tokens delta for an entire document
+    pub fn semantic_tokens_full_delta(
+        &self,
+        request_id: u64,
+        uri: Uri,
+        previous_result_id: String,
+    ) -> Result<(), String> {
+        self.command_tx
+            .try_send(LspCommand::SemanticTokensFullDelta {
+                request_id,
+                uri,
+                previous_result_id,
+            })
+            .map_err(|_| "Failed to send semantic_tokens delta command".to_string())
+    }
+
+    /// Request semantic tokens for a range
+    pub fn semantic_tokens_range(
+        &self,
+        request_id: u64,
+        uri: Uri,
+        range: lsp_types::Range,
+    ) -> Result<(), String> {
+        self.command_tx
+            .try_send(LspCommand::SemanticTokensRange {
+                request_id,
+                uri,
+                range,
+            })
+            .map_err(|_| "Failed to send semantic_tokens_range command".to_string())
     }
 
     /// Cancel a pending request by its editor request_id

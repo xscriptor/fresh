@@ -1,3 +1,4 @@
+use crate::common::git_test_helper::GitTestRepo;
 use crate::common::harness::EditorTestHarness;
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::fs;
@@ -524,6 +525,61 @@ fn test_file_explorer_toggle_gitignored_smoke() {
     harness.render().unwrap();
 
     // Test passes if no panic occurs
+}
+
+/// Test that git status decorations show in the file explorer
+#[test]
+#[cfg_attr(windows, ignore)] // Git plugin tests are flaky on Windows CI
+fn test_file_explorer_git_change_indicator() {
+    let repo = GitTestRepo::new();
+    repo.setup_git_explorer_plugin();
+    repo.create_file("changed.txt", "one");
+    repo.create_file("subdir/child.txt", "alpha");
+    repo.git_add_all();
+    repo.git_commit("Initial commit");
+
+    fs::write(repo.path.join("changed.txt"), "two").unwrap();
+    fs::write(repo.path.join("subdir/child.txt"), "beta").unwrap();
+
+    let mut harness = EditorTestHarness::with_working_dir(120, 40, repo.path.clone()).unwrap();
+
+    harness.editor_mut().toggle_file_explorer();
+    let explorer_visible = harness
+        .wait_for_async(|h| h.screen_to_string().contains("File Explorer"), 2000)
+        .unwrap();
+    assert!(
+        explorer_visible,
+        "Expected File Explorer to appear.\nScreen:\n{}",
+        harness.screen_to_string()
+    );
+
+    let found_file = harness
+        .wait_for_async(|h| h.screen_to_string().contains("M changed.txt"), 2000)
+        .unwrap();
+
+    assert!(
+        found_file,
+        "Expected git change indicator for changed.txt.\nScreen:\n{}",
+        harness.screen_to_string()
+    );
+
+    let found_folder = harness
+        .wait_for_async(
+            |h| {
+                let screen = h.screen_to_string();
+                screen
+                    .lines()
+                    .any(|line| line.contains("subdir") && line.contains("●"))
+            },
+            2000,
+        )
+        .unwrap();
+
+    assert!(
+        found_folder,
+        "Expected bubbled git indicator for subdir.\nScreen:\n{}",
+        harness.screen_to_string()
+    );
 }
 
 /// Test that file_explorer_new_file can be called (smoke test)

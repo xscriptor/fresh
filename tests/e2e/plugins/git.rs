@@ -888,11 +888,18 @@ fn test_git_grep_cursor_position_accuracy() {
         .unwrap();
     harness.render().unwrap();
 
-    // Wait for file to actually load (async operation)
+    // Wait for file to actually load AND cursor to be positioned (both are async operations)
+    // The cursor should be on line 3 (0-indexed = line 2)
+    // Calculate expected byte position for line 3
+    // Line 1: "Line 1\n" = 7 bytes
+    // Line 2: "Line 2\n" = 7 bytes
+    // Line 3 starts at byte 14
     harness
         .wait_until(|h| {
-            let content = h.get_buffer_content().unwrap();
-            content.contains("MARKER")
+            let content = h.get_buffer_content().unwrap_or_default();
+            let cursor_pos = h.cursor_position();
+            // Wait for both: file content loaded AND cursor positioned at line 3
+            content.contains("MARKER") && cursor_pos >= 14
         })
         .unwrap();
 
@@ -900,15 +907,10 @@ fn test_git_grep_cursor_position_accuracy() {
     let buffer_content = harness.get_buffer_content().unwrap();
     println!("Buffer content:\n{buffer_content}");
 
-    // The cursor should be on line 3 (0-indexed = line 2)
-    // Calculate expected byte position for line 3
-    // Line 1: "Line 1\n" = 7 bytes
-    // Line 2: "Line 2\n" = 7 bytes
-    // Line 3 starts at byte 14
     let cursor_pos = harness.cursor_position();
     println!("Cursor position: {cursor_pos}");
 
-    // Cursor should be at line 3 (byte position should be at or after byte 14)
+    // Verify cursor is at line 3 (byte position should be at or after byte 14)
     assert!(
         cursor_pos >= 14,
         "BUG: Cursor should be at line 3 (position >= 14), but is at position {cursor_pos}"

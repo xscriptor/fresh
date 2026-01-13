@@ -378,7 +378,6 @@ impl Editor {
 
                     if let Some(runtime) = &self.tokio_runtime {
                         let path_clone = file_path.clone();
-                        let selected_id = selected_id;
                         let result =
                             runtime.block_on(async { tokio::fs::File::create(&path_clone).await });
 
@@ -432,7 +431,6 @@ impl Editor {
                     if let Some(runtime) = &self.tokio_runtime {
                         let path_clone = dir_path.clone();
                         let dirname_clone = dirname.clone();
-                        let selected_id = selected_id;
                         let result =
                             runtime.block_on(async { tokio::fs::create_dir(&path_clone).await });
 
@@ -691,5 +689,49 @@ impl Editor {
             };
             self.set_status_message(msg.to_string());
         }
+    }
+
+    pub fn handle_set_file_explorer_decorations(
+        &mut self,
+        namespace: String,
+        decorations: Vec<crate::view::file_tree::FileExplorerDecoration>,
+    ) {
+        let normalized: Vec<crate::view::file_tree::FileExplorerDecoration> = decorations
+            .into_iter()
+            .filter_map(|mut decoration| {
+                let path = if decoration.path.is_absolute() {
+                    decoration.path
+                } else {
+                    self.working_dir.join(&decoration.path)
+                };
+                let path = normalize_path(&path);
+                if path.starts_with(&self.working_dir) {
+                    decoration.path = path;
+                    Some(decoration)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        self.file_explorer_decorations.insert(namespace, normalized);
+        self.rebuild_file_explorer_decoration_cache();
+    }
+
+    pub fn handle_clear_file_explorer_decorations(&mut self, namespace: &str) {
+        self.file_explorer_decorations.remove(namespace);
+        self.rebuild_file_explorer_decoration_cache();
+    }
+
+    fn rebuild_file_explorer_decoration_cache(&mut self) {
+        let decorations = self
+            .file_explorer_decorations
+            .values()
+            .flat_map(|entries| entries.iter().cloned());
+        self.file_explorer_decoration_cache =
+            crate::view::file_tree::FileExplorerDecorationCache::rebuild(
+                decorations,
+                &self.working_dir,
+            );
     }
 }

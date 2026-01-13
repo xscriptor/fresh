@@ -590,11 +590,12 @@ fn compute_char_style(ctx: &CharStyleContext) -> CharStyleOutput {
 
     // If we have ANSI style but also syntax highlighting, syntax takes precedence for color
     // (unless ANSI has explicit color which we already applied above)
-    if highlight_color.is_some()
-        && ctx.ansi_style.fg.is_none()
-        && (ctx.ansi_style.bg.is_some() || !ctx.ansi_style.add_modifier.is_empty())
-    {
-        style = style.fg(highlight_color.unwrap());
+    if let Some(color) = highlight_color {
+        if ctx.ansi_style.fg.is_none()
+            && (ctx.ansi_style.bg.is_some() || !ctx.ansi_style.add_modifier.is_empty())
+        {
+            style = style.fg(color);
+        }
     }
 
     // Note: Reference highlighting (word under cursor) is now handled via overlays
@@ -686,6 +687,8 @@ impl SplitRenderer {
     ///
     /// # Returns
     /// * Vec of (split_id, buffer_id, content_rect, scrollbar_rect, thumb_start, thumb_end) for mouse handling
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::type_complexity)]
     pub fn render_content(
         frame: &mut Frame,
         area: Rect,
@@ -1474,6 +1477,7 @@ impl SplitRenderer {
     }
 
     /// Render ViewLine content with syntax highlighting to spans
+    #[allow(clippy::too_many_arguments)]
     fn render_view_line_content(
         spans: &mut Vec<Span<'static>>,
         view_line: &ViewLine,
@@ -1556,12 +1560,9 @@ impl SplitRenderer {
             };
 
             // Accumulate or flush spans based on style changes
-            if current_style.is_some() && current_style != Some(final_style) {
-                if !current_span_text.is_empty() {
-                    spans.push(Span::styled(
-                        std::mem::take(&mut current_span_text),
-                        current_style.unwrap(),
-                    ));
+            if let Some(style) = current_style {
+                if style != final_style && !current_span_text.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut current_span_text), style));
                 }
             }
 
@@ -1835,6 +1836,7 @@ impl SplitRenderer {
 
     /// Render a scrollbar for a split
     /// Returns (thumb_start, thumb_end) positions for mouse hit testing
+    #[allow(clippy::too_many_arguments)]
     fn render_scrollbar(
         frame: &mut Frame,
         state: &EditorState,
@@ -1944,6 +1946,7 @@ impl SplitRenderer {
         (thumb_start, thumb_end)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_view_data(
         state: &mut EditorState,
         viewport: &crate::view::viewport::Viewport,
@@ -2080,10 +2083,11 @@ impl SplitRenderer {
             // Find LineAbove virtual texts anchored to this line
             if let (Some(start), Some(end)) = (line_start_byte, line_end_byte) {
                 for (anchor_pos, vtext) in &virtual_lines {
-                    if *anchor_pos >= start && *anchor_pos < end {
-                        if vtext.position == VirtualTextPosition::LineAbove {
-                            result.push(Self::create_virtual_line(&vtext.text, vtext.style));
-                        }
+                    if *anchor_pos >= start
+                        && *anchor_pos < end
+                        && vtext.position == VirtualTextPosition::LineAbove
+                    {
+                        result.push(Self::create_virtual_line(&vtext.text, vtext.style));
                     }
                 }
             }
@@ -2094,10 +2098,11 @@ impl SplitRenderer {
             // Find LineBelow virtual texts anchored to this line
             if let (Some(start), Some(end)) = (line_start_byte, line_end_byte) {
                 for (anchor_pos, vtext) in &virtual_lines {
-                    if *anchor_pos >= start && *anchor_pos < end {
-                        if vtext.position == VirtualTextPosition::LineBelow {
-                            result.push(Self::create_virtual_line(&vtext.text, vtext.style));
-                        }
+                    if *anchor_pos >= start
+                        && *anchor_pos < end
+                        && vtext.position == VirtualTextPosition::LineBelow
+                    {
+                        result.push(Self::create_virtual_line(&vtext.text, vtext.style));
                     }
                 }
             }
@@ -2135,7 +2140,7 @@ impl SplitRenderer {
         let max_lines = visible_count.saturating_add(4);
 
         while lines_seen < max_lines {
-            if let Some((line_start, line_content)) = iter.next() {
+            if let Some((line_start, line_content)) = iter.next_line() {
                 let mut byte_offset = 0usize;
                 let content_bytes = line_content.as_bytes();
                 let mut skip_next_lf = false; // Track if we should skip \n after \r in CRLF
@@ -2676,7 +2681,7 @@ impl SplitRenderer {
             };
         }
 
-        let target_width = compose_width.map(|w| w as u16).unwrap_or(area.width);
+        let target_width = compose_width.unwrap_or(area.width);
         let clamped_width = target_width.min(area.width).max(1);
         if clamped_width >= area.width {
             return ComposeLayout {
@@ -2842,23 +2847,27 @@ impl SplitRenderer {
             theme.semantic_highlight_bg,
         );
 
-        // Resolve semantic tokens for this viewport (if version matches)
-        let semantic_token_spans = if let Some(store) = &state.semantic_tokens {
-            if store.version == state.buffer.version() {
-                Self::collect_semantic_token_spans(store, viewport_start, viewport_end, theme)
-            } else {
-                Vec::new()
+        // Semantic tokens are stored as overlays so their ranges track edits.
+        // Convert them into highlight spans for the render pipeline.
+        let mut semantic_token_spans = Vec::new();
+        let mut viewport_overlays = Vec::new();
+        for (overlay, range) in
+            state
+                .overlays
+                .query_viewport(viewport_start, viewport_end, &state.marker_list)
+        {
+            if crate::services::lsp::semantic_tokens::is_semantic_token_overlay(overlay) {
+                if let crate::view::overlay::OverlayFace::Foreground { color } = &overlay.face {
+                    semantic_token_spans.push(crate::primitives::highlighter::HighlightSpan {
+                        range,
+                        color: *color,
+                    });
+                }
+                continue;
             }
-        } else {
-            Vec::new()
-        };
 
-        let viewport_overlays = state
-            .overlays
-            .query_viewport(viewport_start, viewport_end, &state.marker_list)
-            .into_iter()
-            .map(|(overlay, range)| (overlay.clone(), range))
-            .collect::<Vec<_>>();
+            viewport_overlays.push((overlay.clone(), range));
+        }
 
         // Use the lsp-diagnostic namespace to identify diagnostic overlays
         let diagnostic_ns = crate::services::lsp::diagnostics::lsp_diagnostic_namespace();
@@ -2897,49 +2906,7 @@ impl SplitRenderer {
         }
     }
 
-    fn collect_semantic_token_spans(
-        store: &crate::state::SemanticTokenStore,
-        viewport_start: usize,
-        viewport_end: usize,
-        theme: &crate::view::theme::Theme,
-    ) -> Vec<crate::primitives::highlighter::HighlightSpan> {
-        store
-            .tokens
-            .iter()
-            .filter(|span| span.range.end > viewport_start && span.range.start < viewport_end)
-            .map(|span| crate::primitives::highlighter::HighlightSpan {
-                range: span.range.clone(),
-                color: Self::color_for_semantic_token(&span.token_type, &span.modifiers, theme),
-            })
-            .collect()
-    }
-
-    fn color_for_semantic_token(
-        token_type: &str,
-        modifiers: &[String],
-        theme: &crate::view::theme::Theme,
-    ) -> Color {
-        if modifiers.iter().any(|m| m == "deprecated") {
-            return theme.diagnostic_warning_fg;
-        }
-
-        match token_type {
-            "keyword" | "modifier" => theme.syntax_keyword,
-            "function" | "method" | "macro" => theme.syntax_function,
-            "parameter" | "variable" | "property" | "enumMember" | "event" | "label" => {
-                theme.syntax_variable
-            }
-            "type" | "class" | "interface" | "struct" | "typeParameter" | "namespace" | "enum" => {
-                theme.syntax_type
-            }
-            "number" => theme.syntax_constant,
-            "string" | "regexp" => theme.syntax_string,
-            "operator" => theme.syntax_operator,
-            "comment" => theme.syntax_comment,
-            "decorator" => theme.syntax_function,
-            _ => theme.syntax_variable,
-        }
-    }
+    // semantic token colors are mapped when overlays are created
 
     fn calculate_viewport_end(
         state: &mut EditorState,
@@ -2952,7 +2919,7 @@ impl SplitRenderer {
             .line_iterator(viewport_start, estimated_line_length);
         let mut viewport_end = viewport_start;
         for _ in 0..visible_count {
-            if let Some((line_start, line_content)) = iter_temp.next() {
+            if let Some((line_start, line_content)) = iter_temp.next_line() {
                 viewport_end = line_start + line_content.len();
             } else {
                 break;
@@ -3155,8 +3122,8 @@ impl SplitRenderer {
             let mut first_line_byte_pos: Option<usize> = None;
             let mut last_line_byte_pos: Option<usize> = None;
 
-            let mut chars_iterator = line_content.chars().peekable();
-            while let Some(ch) = chars_iterator.next() {
+            let chars_iterator = line_content.chars().peekable();
+            for ch in chars_iterator {
                 // Get source byte for this character using character index
                 // (char_source_bytes is indexed by character position, not visual column)
                 let byte_pos = line_char_source_bytes
@@ -3210,7 +3177,7 @@ impl SplitRenderer {
                 }
 
                 // Skip characters before left_column
-                if col_offset >= left_col as usize {
+                if col_offset >= left_col {
                     // Check if this view position is the START of a tab expansion
                     let is_tab_start = line_tab_starts.contains(&col_offset);
 
@@ -3252,10 +3219,9 @@ impl SplitRenderer {
                     let exclude_from_selection = is_cursor && !(is_active && is_primary_cursor);
 
                     let is_selected = !exclude_from_selection
-                        && byte_pos.map_or(false, |bp| {
+                        && (byte_pos.is_some_and(|bp| {
                             selection_ranges.iter().any(|range| range.contains(&bp))
-                        })
-                        || (!exclude_from_selection && is_in_block_selection);
+                        }) || is_in_block_selection);
 
                     // Compute character style using helper function
                     // char_styles is indexed by character position, not visual column
@@ -3290,8 +3256,6 @@ impl SplitRenderer {
                     } else if debug_tracker.is_some() && ch == '\n' {
                         // Debug mode: show LF explicitly
                         "\\n"
-                    } else if is_cursor && is_active && ch == '\n' {
-                        ""
                     } else if ch == '\n' {
                         ""
                     } else if is_tab_start && state.show_whitespace_tabs {
@@ -3468,7 +3432,7 @@ impl SplitRenderer {
                 let cursor_at_end = cursor_positions.iter().any(|&pos| {
                     // Cursor is "at end" only if it's AFTER the last character, not ON it.
                     // A cursor ON the last character should render on that character (handled in main loop).
-                    let matches_after = after_last_char_buf_pos.map_or(false, |bp| pos == bp);
+                    let matches_after = after_last_char_buf_pos.is_some_and(|bp| pos == bp);
                     // Fallback: when there's no mapping after last char (EOF), check if cursor is after last char
                     // The fallback should match the position that would be "after" if there was a mapping
                     let expected_after_pos = last_char_buf_pos.map(|p| p + 1).unwrap_or(0);
@@ -3481,25 +3445,27 @@ impl SplitRenderer {
                 if cursor_at_end {
                     // Primary cursor is at end only if AFTER the last char, not ON it
                     let is_primary_at_end = after_last_char_buf_pos
-                        .map_or(false, |bp| bp == primary_cursor_position)
+                        .is_some_and(|bp| bp == primary_cursor_position)
                         || (after_last_char_buf_pos.is_none()
                             && primary_cursor_position >= state.buffer.len());
 
                     // Track cursor position for primary cursor
-                    if is_primary_at_end && last_seg_y.is_some() {
-                        // Cursor position now includes gutter width (consistent with main cursor tracking)
-                        // For empty lines, cursor is at gutter width (right after gutter)
-                        // For non-empty lines without newline, cursor is after the last visible character
-                        // Account for horizontal scrolling by using col_offset - left_col
-                        cursor_screen_x = if line_len_chars == 0 {
-                            gutter_width as u16
-                        } else {
-                            // col_offset is the visual column after the last character
-                            // Subtract left_col to get the screen position after horizontal scroll
-                            gutter_width as u16 + col_offset.saturating_sub(left_col) as u16
-                        };
-                        cursor_screen_y = last_seg_y.unwrap();
-                        have_cursor = true;
+                    if let Some(seg_y) = last_seg_y {
+                        if is_primary_at_end {
+                            // Cursor position now includes gutter width (consistent with main cursor tracking)
+                            // For empty lines, cursor is at gutter width (right after gutter)
+                            // For non-empty lines without newline, cursor is after the last visible character
+                            // Account for horizontal scrolling by using col_offset - left_col
+                            cursor_screen_x = if line_len_chars == 0 {
+                                gutter_width as u16
+                            } else {
+                                // col_offset is the visual column after the last character
+                                // Subtract left_col to get the screen position after horizontal scroll
+                                gutter_width as u16 + col_offset.saturating_sub(left_col) as u16
+                            };
+                            cursor_screen_y = seg_y;
+                            have_cursor = true;
+                        }
                     }
 
                     let should_add_indicator = if is_active { !is_primary_at_end } else { true };
@@ -3579,12 +3545,8 @@ impl SplitRenderer {
                                     }
                                     crate::view::overlay::OverlayFace::Style { style } => {
                                         // Extract background from style if present
-                                        if let Some(bg) = style.bg {
-                                            // Set fg to same as bg for invisible text
-                                            Some(Style::default().fg(bg).bg(bg))
-                                        } else {
-                                            None
-                                        }
+                                        // Set fg to same as bg for invisible text
+                                        style.bg.map(|bg| Style::default().fg(bg).bg(bg))
                                     }
                                     _ => None,
                                 }
@@ -3815,6 +3777,7 @@ impl SplitRenderer {
 
     /// Render a single buffer in a split pane
     /// Returns the view line mappings for mouse click handling
+    #[allow(clippy::too_many_arguments)]
     fn render_buffer_in_split(
         frame: &mut Frame,
         state: &mut EditorState,
@@ -3995,7 +3958,7 @@ impl SplitRenderer {
         });
 
         let mut lines = render_output.lines;
-        let background_x_offset = viewport.left_column as usize;
+        let background_x_offset = viewport.left_column;
 
         if let Some(bg) = ansi_background {
             Self::apply_background_to_lines(
@@ -4040,7 +4003,7 @@ impl SplitRenderer {
             }
         }
 
-        let buffer_ends_with_newline = if state.buffer.len() > 0 {
+        let buffer_ends_with_newline = if !state.buffer.is_empty() {
             let last_char = state.get_text_range(state.buffer.len() - 1, state.buffer.len());
             last_char == "\n"
         } else {
@@ -4095,7 +4058,7 @@ impl SplitRenderer {
     /// * `line_spans` - The original styled spans for the entire line
     /// * `segment_start_offset` - Character offset where this segment starts in the original line
     /// * `scroll_offset` - Additional offset for horizontal scrolling (non-wrap mode)
-
+    #[allow(clippy::too_many_arguments)]
     fn apply_background_to_lines(
         lines: &mut Vec<Line<'static>>,
         area_width: u16,
@@ -5224,7 +5187,7 @@ mod tests {
         // Step 4: Simulate highlight span lookup
         // If TreeSitter highlights "int" as keyword (bytes 0-3 for line 1, bytes 8-11 for line 2),
         // the lookup should find these correctly.
-        let simulated_highlight_spans = vec![
+        let simulated_highlight_spans = [
             // "int" on line 1: bytes 0-3
             (0usize..3usize, "keyword"),
             // "int" on line 2: bytes 8-11

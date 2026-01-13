@@ -144,6 +144,7 @@ pub enum Language {
     Bash,
     Lua,
     Pascal,
+    Odin,
     // Markdown,  // Disabled due to tree-sitter version conflict
 }
 
@@ -168,6 +169,7 @@ impl Language {
             "sh" | "bash" => Some(Language::Bash),
             "lua" => Some(Language::Lua),
             "pas" | "p" => Some(Language::Pascal),
+            "odin" => Some(Language::Odin),
             // "md" => Some(Language::Markdown),  // Disabled
             _ => None,
         }
@@ -651,6 +653,36 @@ impl Language {
                 ]);
 
                 Ok(config)
+            }
+            Language::Odin => {
+                // Odin highlighting is handled by syntect (TextMate) via our embedded grammar
+                // Tree-sitter is still used for auto-indentation and semantic highlighting
+                tracing::warn!("Odin highlighting uses TextMate/syntect, not tree-sitter.");
+
+                let mut config = HighlightConfiguration::new(
+                    tree_sitter_odin::LANGUAGE.into(),
+                    "odin",
+                    "", // No highlights query - syntect handles highlighting
+                    "", // injections query
+                    "", // locals query
+                )
+                .map_err(|e| format!("Failed to create Odin highlight config: {e}"))?;
+
+                config.configure(&[
+                    "attribute",
+                    "comment",
+                    "constant",
+                    "function",
+                    "keyword",
+                    "number",
+                    "operator",
+                    "property",
+                    "string",
+                    "type",
+                    "variable",
+                ]);
+
+                Ok(config)
             } // Language::Markdown => {
               //     // Disabled due to tree-sitter version conflict
               //     Err("Markdown highlighting not available".to_string())
@@ -687,6 +719,7 @@ impl std::fmt::Display for Language {
             Self::Bash => "bash",
             Self::Lua => "lua",
             Self::Pascal => "pascal",
+            Self::Odin => "odin",
         };
         write!(f, "{}", s)
     }

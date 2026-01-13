@@ -33,15 +33,13 @@ pub fn compute_tab_scroll_offset(
     let mut tab_end = 0usize;
 
     // Walk through widths to locate active tab boundaries.
-    let mut tab_counter = 0usize;
-    for w in tab_widths {
+    for (tab_counter, w) in tab_widths.iter().enumerate() {
         let next = tab_start + *w;
         if tab_counter == active_idx {
             tab_end = next;
             break;
         }
         tab_start = next + padding_between_tabs;
-        tab_counter += 1;
     }
 
     // If we didn't find the tab, keep current offset.
@@ -56,35 +54,6 @@ pub fn compute_tab_scroll_offset(
     }
 
     offset.min(total_width.saturating_sub(max_width))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::compute_tab_scroll_offset;
-
-    #[test]
-    fn offset_clamped_to_zero_when_active_first() {
-        let widths = vec![5, 5, 5]; // tab widths
-        let offset = compute_tab_scroll_offset(&widths, 0, 6, 10, 1);
-        assert_eq!(offset, 0);
-    }
-
-    #[test]
-    fn offset_moves_to_show_active_tab() {
-        let widths = vec![5, 8, 6]; // active is the middle tab (index 1)
-        let offset = compute_tab_scroll_offset(&widths, 1, 6, 0, 1);
-        // Active tab width 8 cannot fully fit into width 6; expect it to right-align within view.
-        assert_eq!(offset, 8);
-    }
-
-    #[test]
-    fn offset_respects_total_width_bounds() {
-        let widths = vec![3, 3, 3, 3];
-        let offset = compute_tab_scroll_offset(&widths, 3, 4, 100, 1);
-        let total: usize = widths.iter().sum();
-        let total_with_padding = total + 3; // three gaps of width 1
-        assert!(offset <= total_with_padding.saturating_sub(4));
-    }
 }
 
 impl TabsRenderer {
@@ -104,6 +73,7 @@ impl TabsRenderer {
     /// # Returns
     /// Vec of (buffer_id, tab_start_col, tab_end_col, close_start_col) for each visible tab.
     /// These are absolute screen column positions for hit testing.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_for_split(
         frame: &mut Frame,
         area: Rect,
@@ -126,7 +96,7 @@ impl TabsRenderer {
         let mut rendered_buffer_ids: Vec<BufferId> = Vec::new(); // Track which buffers actually got rendered
 
         // First, build all spans and calculate their display widths
-        for (_idx, id) in split_buffers.iter().enumerate() {
+        for id in split_buffers.iter() {
             // Check if this is a regular buffer or a composite buffer
             let is_regular_buffer = buffers.contains_key(id);
             let is_composite_buffer = composite_buffers.contains_key(id);
@@ -495,5 +465,34 @@ impl TabsRenderer {
             0,    // Default tab_scroll_offset for legacy render
             None, // No hover state for legacy render
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_tab_scroll_offset;
+
+    #[test]
+    fn offset_clamped_to_zero_when_active_first() {
+        let widths = vec![5, 5, 5]; // tab widths
+        let offset = compute_tab_scroll_offset(&widths, 0, 6, 10, 1);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn offset_moves_to_show_active_tab() {
+        let widths = vec![5, 8, 6]; // active is the middle tab (index 1)
+        let offset = compute_tab_scroll_offset(&widths, 1, 6, 0, 1);
+        // Active tab width 8 cannot fully fit into width 6; expect it to right-align within view.
+        assert_eq!(offset, 8);
+    }
+
+    #[test]
+    fn offset_respects_total_width_bounds() {
+        let widths = vec![3, 3, 3, 3];
+        let offset = compute_tab_scroll_offset(&widths, 3, 4, 100, 1);
+        let total: usize = widths.iter().sum();
+        let total_with_padding = total + 3; // three gaps of width 1
+        assert!(offset <= total_with_padding.saturating_sub(4));
     }
 }

@@ -46,11 +46,90 @@
  * and define buffer-local keybindings. Virtual buffers typically use custom modes.
  */
 
-declare global {
+/**
+ * Get the editor API instance.
+ * Plugins must call this at the top of their file to get a scoped editor object.
+ * @returns The editor API object for this plugin
+ * @example
+ * const editor = getEditor();
+ */
+declare function getEditor(): EditorAPI;
+
+/**
+ * Plugin-specific methods added by the JavaScript runtime wrapper.
+ * These extend the base EditorAPI with i18n and command registration helpers.
+ */
+interface EditorAPI {
   /**
-   * Global editor API object available to all TypeScript plugins
+   * Translate a string using the plugin's i18n file
+   * @param key - Translation key (e.g., "status.ready")
+   * @param args - Optional interpolation arguments
+   * @returns Translated string
    */
-  const editor: EditorAPI;
+  t(key: string, args?: Record<string, string>): string;
+
+  /**
+   * Get the i18n helper object (for compatibility)
+   * @returns Object with t() method bound to this plugin
+   */
+  getL10n(): { t: (key: string, args?: Record<string, string>) => string };
+
+  /**
+   * Register a custom command (plugin wrapper - source is added automatically)
+   * @param name - Command name (use %key for i18n)
+   * @param description - Command description (use %key for i18n)
+   * @param action - Global function name to call
+   * @param contexts - Comma-separated contexts (default: "")
+   * @returns true if command was registered
+   */
+  registerCommand(name: string, description: string, action: string, contexts?: string): boolean;
+
+  /**
+   * Copy text to system clipboard (alias for setClipboard)
+   * @param text - Text to copy
+   */
+  copyToClipboard(text: string): void;
+
+  /**
+   * Join path segments into a single path (variadic version)
+   * @param parts - Path segments to join
+   * @returns Joined path string
+   */
+  pathJoin(...parts: string[]): string;
+
+  /**
+   * Add a visual overlay to buffer text (with optional parameters)
+   * Most parameters have defaults: bold=false, italic=false, bg=-1 (transparent), extend=false
+   */
+  addOverlay(
+    buffer_id: number,
+    namespace: string,
+    start: number,
+    end: number,
+    r: number,
+    g: number,
+    b: number,
+    underline: boolean,
+    bold?: boolean,
+    italic?: boolean,
+    bg_r?: number,
+    bg_g?: number,
+    bg_b?: number,
+    extend_to_line_end?: boolean
+  ): boolean;
+
+  /**
+   * Get the theme JSON Schema (with proper typing)
+   */
+  getThemeSchema(): {
+    $defs?: Record<string, Record<string, unknown>>;
+    properties?: Record<string, unknown>;
+  };
+
+  /**
+   * Get built-in themes as a map of name to JSON string
+   */
+  getBuiltinThemes(): Record<string, string>;
 }
 
 /**
@@ -89,6 +168,18 @@ interface ProcessHandle extends PromiseLike<SpawnResult> {
   readonly result: Promise<SpawnResult>;
   /** Kill the process. Returns true if killed, false if already completed */
   kill(): Promise<boolean>;
+}
+
+/** File explorer decoration entry provided by plugins */
+interface FileExplorerDecoration {
+  /** Absolute or workspace-relative path to decorate */
+  path: string;
+  /** Symbol to display (single character recommended) */
+  symbol?: string | null;
+  /** RGB color for the symbol */
+  color?: [u8; 3] | null;
+  /** Priority for resolving conflicts (higher wins) */
+  priority?: number | null;
 }
 
 /** Result from spawnProcess */
@@ -309,7 +400,7 @@ interface TsCompositeLayoutConfig {
   /** Show separator between panes */
   show_separator?: boolean | null;
   /** Spacing between stacked panes */
-  spacing?: u16 | null;
+  spacing?: number | null;
 }
 
 /** Pane style configuration */
@@ -515,7 +606,7 @@ interface EditorAPI {
    * @param process_id - ID returned from spawnBackgroundProcess
    * @returns true if process is running, false if not found or exited
    */
-  isProcessRunning(#[bigint] process_id: number): boolean;
+  isProcessRunning(process_id: number): boolean;
   /** Compute syntax highlighting for a buffer range */
   getHighlights(buffer_id: number, start: number, end: number): Promise<TsHighlightSpan[]>;
   /** Get diff vs last saved snapshot for a buffer */
@@ -686,7 +777,7 @@ interface EditorAPI {
    * @param priority - Priority for ordering multiple lines at same position
    * @returns true if virtual line was added
    */
-  addVirtualLine(buffer_id: number, position: number, text: string, fg_r: number, fg_g: number, fg_b: number, bg_r: i16, bg_g: i16, bg_b: i16, above: boolean, namespace: string, priority: number): boolean;
+  addVirtualLine(buffer_id: number, position: number, text: string, fg_r: number, fg_g: number, fg_b: number, bg_r: number, bg_g: number, bg_b: number, above: boolean, namespace: string, priority: number): boolean;
   /**
    * Set a line indicator in the gutter's indicator column
    * @param buffer_id - The buffer ID
@@ -707,6 +798,19 @@ interface EditorAPI {
    * @returns true if indicators were cleared
    */
   clearLineIndicators(buffer_id: number, namespace: string): boolean;
+  /**
+   * Set file explorer decorations for a namespace
+   * @param namespace - Namespace for grouping (e.g., "git-status")
+   * @param decorations - Decoration entries
+   * @returns true if decorations were accepted
+   */
+  setFileExplorerDecorations(namespace: string, decorations: FileExplorerDecoration[]): boolean;
+  /**
+   * Clear file explorer decorations for a namespace
+   * @param namespace - Namespace to clear (e.g., "git-status")
+   * @returns true if decorations were cleared
+   */
+  clearFileExplorerDecorations(namespace: string): boolean;
   /**
    * Submit a transformed view stream for a viewport
    * @param buffer_id - Buffer to apply the transform to
@@ -793,14 +897,14 @@ interface EditorAPI {
    * @param process_id - ID returned from spawnBackgroundProcess or spawnProcessStart
    * @returns true if process was killed, false if not found
    */
-  killProcess(#[bigint] process_id: number): Promise<boolean>;
+  killProcess(process_id: number): Promise<boolean>;
   /**
    * Wait for a cancellable process to complete and get its result
    *
    * @param process_id - ID returned from spawnProcessStart
    * @returns SpawnResult with stdout, stderr, and exit_code
    */
-  spawnProcessWait(#[bigint] process_id: number): Promise<SpawnResult>;
+  spawnProcessWait(process_id: number): Promise<SpawnResult>;
   /**
    * Delay execution for a specified number of milliseconds
    *
@@ -809,7 +913,7 @@ interface EditorAPI {
    * @example
    * await editor.delay(100);  // Wait 100ms
    */
-  delay(#[bigint] ms: number): Promise<[]>;
+  delay(ms: number): Promise<void>;
   /** Find a buffer ID by its file path */
   findBufferByPath(path: string): number;
   /**
@@ -827,7 +931,7 @@ interface EditorAPI {
    * This is a safe operation that prevents plugins from deleting arbitrary files.
    * @param name - Theme name (without .json extension)
    */
-  deleteTheme(name: string): Promise<[]>;
+  deleteTheme(name: string): Promise<void>;
   /**
    * Create a composite buffer that displays multiple source buffers
    *
@@ -946,7 +1050,7 @@ interface EditorAPI {
    * Anchors map corresponding line numbers between left and right buffers.
    * Each anchor is a tuple of (left_line, right_line).
    */
-  setScrollSyncAnchors(group_id: number, anchors: Vec<(usize, usize): boolean;
+  setScrollSyncAnchors(group_id: number, anchors: [number, number][]): boolean;
   /** Remove a scroll sync group */
   removeScrollSyncGroup(group_id: number): boolean;
 
@@ -989,7 +1093,7 @@ interface EditorAPI {
    * @param extend_to_line_end - Extend background to end of visual line
    * @returns true if overlay was added
    */
-  addOverlay(buffer_id: number, namespace: string, start: number, end: number, r: number, g: number, b: number, bg_r: i16, bg_g: i16, bg_b: i16, underline: boolean, bold: boolean, italic: boolean, extend_to_line_end: boolean): boolean;
+  addOverlay(buffer_id: number, namespace: string, start: number, end: number, r: number, g: number, b: number, bg_r: number, bg_g: number, bg_b: number, underline: boolean, bold: boolean, italic: boolean, extend_to_line_end: boolean): boolean;
   /**
    * Remove a specific overlay by its handle
    * @param buffer_id - The buffer ID
@@ -1076,7 +1180,7 @@ interface EditorAPI {
    * @param path - Destination path (absolute or relative to cwd)
    * @param content - UTF-8 string to write
    */
-  writeFile(path: string, content: string): Promise<[]>;
+  writeFile(path: string, content: string): Promise<void>;
   /**
    * Check if a path exists (file, directory, or symlink)
    *
@@ -1264,7 +1368,7 @@ interface EditorAPI {
    * ["q", "close_buffer"]
    * ], true);
    */
-  defineMode(name: string, parent: string, bindings: Vec<(String, String): boolean;
+  defineMode(name: string, parent: string, bindings: [string, string][], read_only: boolean): boolean;
   /**
    * Switch the current split to display a buffer
    * @param buffer_id - ID of the buffer to show
@@ -1316,6 +1420,3 @@ interface EditorAPI {
   setVirtualBufferContent(buffer_id: number, entries: TextPropertyEntry[]): boolean;
 
 }
-
-// Export for module compatibility
-export {};

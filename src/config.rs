@@ -169,7 +169,7 @@ impl CursorStyle {
     }
 
     /// Parse from string (for command palette)
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "default" => Some(CursorStyle::Default),
             "blinking_block" => Some(CursorStyle::BlinkingBlock),
@@ -246,21 +246,16 @@ impl PartialEq<str> for KeybindingMapName {
 }
 
 /// Line ending format for new files
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LineEndingOption {
     /// Unix/Linux/macOS format (LF)
+    #[default]
     Lf,
     /// Windows format (CRLF)
     Crlf,
     /// Classic Mac format (CR) - rare
     Cr,
-}
-
-impl Default for LineEndingOption {
-    fn default() -> Self {
-        Self::Lf
-    }
 }
 
 impl LineEndingOption {
@@ -326,7 +321,8 @@ pub struct Config {
     #[serde(default)]
     pub locale: LocaleName,
 
-    /// Check for new versions on quit (default: true)
+    /// Check for new versions on startup (default: true).
+    /// When enabled, also sends basic anonymous telemetry (version, OS, terminal type).
     #[serde(default = "default_true")]
     pub check_for_updates: bool,
 
@@ -370,6 +366,13 @@ pub struct Config {
     /// Warning notification settings
     #[serde(default)]
     pub warnings: WarningsConfig,
+
+    /// Plugin configurations by plugin name
+    /// Plugins are auto-discovered from the plugins directory.
+    /// Use this to enable/disable specific plugins.
+    #[serde(default)]
+    #[schemars(extend("x-standalone-category" = true, "x-no-add" = true))]
+    pub plugins: HashMap<String, PluginConfig>,
 }
 
 fn default_keybinding_map_name() -> KeybindingMapName {
@@ -429,6 +432,7 @@ pub struct EditorConfig {
     /// Files larger than this will:
     /// - Skip LSP features
     /// - Use constant-size scrollbar thumb (1 char)
+    ///
     /// Files smaller will count actual lines for accurate scrollbar rendering
     #[serde(default = "default_large_file_threshold")]
     pub large_file_threshold_bytes: u64,
@@ -442,6 +446,12 @@ pub struct EditorConfig {
     /// Whether to enable LSP inlay hints (type hints, parameter hints, etc.)
     #[serde(default = "default_true")]
     pub enable_inlay_hints: bool,
+
+    /// Whether to request full-document LSP semantic tokens.
+    /// Range requests are still used when supported.
+    /// Default: false (range-only to avoid heavy full refreshes).
+    #[serde(default = "default_false")]
+    pub enable_semantic_tokens_full: bool,
 
     /// Whether to enable file recovery (Emacs-style auto-save)
     /// When enabled, buffers are periodically saved to recovery files
@@ -507,6 +517,35 @@ pub struct EditorConfig {
     /// Default: blinking_block
     #[serde(default)]
     pub cursor_style: CursorStyle,
+
+    /// Enable keyboard enhancement: disambiguate escape codes using CSI-u sequences.
+    /// This allows unambiguous reading of Escape and modified keys.
+    /// Requires terminal support (kitty keyboard protocol).
+    /// Default: true
+    #[serde(default = "default_true")]
+    pub keyboard_disambiguate_escape_codes: bool,
+
+    /// Enable keyboard enhancement: report key event types (repeat/release).
+    /// Adds extra events when keys are autorepeated or released.
+    /// Requires terminal support (kitty keyboard protocol).
+    /// Default: false
+    #[serde(default = "default_false")]
+    pub keyboard_report_event_types: bool,
+
+    /// Enable keyboard enhancement: report alternate keycodes.
+    /// Sends alternate keycodes in addition to the base keycode.
+    /// Requires terminal support (kitty keyboard protocol).
+    /// Default: true
+    #[serde(default = "default_true")]
+    pub keyboard_report_alternate_keys: bool,
+
+    /// Enable keyboard enhancement: report all keys as escape codes.
+    /// Represents all keyboard events as CSI-u sequences.
+    /// Required for repeat/release events on plain-text keys.
+    /// Requires terminal support (kitty keyboard protocol).
+    /// Default: false
+    #[serde(default = "default_false")]
+    pub keyboard_report_all_keys_as_escape_codes: bool,
 
     /// Enable quick suggestions (VS Code-like behavior).
     /// When enabled, completion suggestions appear automatically while typing,
@@ -606,6 +645,7 @@ impl Default for EditorConfig {
             large_file_threshold_bytes: default_large_file_threshold(),
             estimated_line_length: default_estimated_line_length(),
             enable_inlay_hints: true,
+            enable_semantic_tokens_full: false,
             recovery_enabled: true,
             auto_save_interval_secs: default_auto_save_interval(),
             highlight_context_bytes: default_highlight_context_bytes(),
@@ -616,6 +656,10 @@ impl Default for EditorConfig {
             file_tree_poll_interval_ms: default_file_tree_poll_interval(),
             default_line_ending: LineEndingOption::default(),
             cursor_style: CursorStyle::default(),
+            keyboard_disambiguate_escape_codes: true,
+            keyboard_report_event_types: false,
+            keyboard_report_alternate_keys: true,
+            keyboard_report_all_keys_as_escape_codes: false,
             quick_suggestions: true,
             show_menu_bar: true,
             show_tab_bar: true,
@@ -685,6 +729,41 @@ impl Default for WarningsConfig {
     }
 }
 
+/// Configuration for an individual plugin
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("x-display-field" = "/enabled"))]
+pub struct PluginConfig {
+    /// Whether this plugin is enabled (default: true)
+    /// When disabled, the plugin will not be loaded or executed.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Path to the plugin file (populated automatically when scanning)
+    /// This is filled in by the plugin system and should not be set manually.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("readOnly" = true))]
+    pub path: Option<std::path::PathBuf>,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: None,
+        }
+    }
+}
+
+impl PluginConfig {
+    /// Create a new plugin config with the given path
+    pub fn new_with_path(path: std::path::PathBuf) -> Self {
+        Self {
+            enabled: true,
+            path: Some(path),
+        }
+    }
+}
+
 impl Default for FileExplorerConfig {
     fn default() -> Self {
         Self {
@@ -698,17 +777,11 @@ impl Default for FileExplorerConfig {
 }
 
 /// File browser configuration (for Open File dialog)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FileBrowserConfig {
     /// Whether to show hidden files (starting with .) by default in Open File dialog
     #[serde(default = "default_false")]
     pub show_hidden: bool,
-}
-
-impl Default for FileBrowserConfig {
-    fn default() -> Self {
-        Self { show_hidden: false }
-    }
 }
 
 /// A single key in a sequence
@@ -1011,7 +1084,7 @@ pub enum HighlighterPreference {
 }
 
 /// Menu bar configuration
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct MenuConfig {
     /// List of top-level menus in the menu bar
     #[serde(default)]
@@ -1137,13 +1210,8 @@ impl Default for Config {
             languages: Self::default_languages(),
             lsp: Self::default_lsp_config(),
             warnings: WarningsConfig::default(),
+            plugins: HashMap::new(), // Populated when scanning for plugins
         }
-    }
-}
-
-impl Default for MenuConfig {
-    fn default() -> Self {
-        Self { menus: vec![] }
     }
 }
 
@@ -2279,6 +2347,25 @@ impl Config {
             },
         );
 
+        languages.insert(
+            "odin".to_string(),
+            LanguageConfig {
+                extensions: vec!["odin".to_string()],
+                filenames: vec![],
+                grammar: "odin".to_string(),
+                comment_prefix: Some("//".to_string()),
+                auto_indent: true,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: false,
+                use_tabs: true,
+                tab_size: Some(8),
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
         languages
     }
 
@@ -2431,6 +2518,20 @@ impl Config {
             "csharp".to_string(),
             LspServerConfig {
                 command: "csharp-ls".to_string(),
+                args: vec![],
+                enabled: true,
+                auto_start: false,
+                process_limits: ProcessLimits::default(),
+                initialization_options: None,
+            },
+        );
+
+        // ols - Odin Language Server (https://github.com/DanielGavin/ols)
+        // Build from source: cd ols && ./build.sh (Linux/macOS) or ./build.bat (Windows)
+        lsp.insert(
+            "odin".to_string(),
+            LspServerConfig {
+                command: "ols".to_string(),
                 args: vec![],
                 enabled: true,
                 auto_start: false,

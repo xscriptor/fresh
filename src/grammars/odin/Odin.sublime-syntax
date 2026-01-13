@@ -1,0 +1,252 @@
+%YAML 1.2
+---
+# http://www.sublimetext.com/docs/3/syntax.html
+name: Odin
+file_extensions:
+  - odin
+first_line_match: "-[*]-( Mode:)? Odin -[*]-"
+scope: source.odin
+variables:
+  identifier: '\b[[:alpha:]_][[:alnum:]_]*\b'
+  type_chars: '[[:alnum:]\s,._^<>\[\]-]'
+  screaming_identifier: '\b[A-Z_](?![a-z])[A-Z_0-9]+\b'
+
+contexts:
+  main:
+    - include: global
+
+  global:
+    - include: comments
+    - include: types
+    - include: keywords
+    - include: functions-and-declarations
+    - include: strings
+    - include: string-escaped-char
+
+  block-comment:
+    - match: /\*
+      scope: punctuation.definition.comment.odin
+      push:
+        - meta_scope: comment.block.odin
+        - match: \*/
+          scope: punctuation.definition.comment.odin
+          pop: true
+        - include: block-comment
+
+  comments:
+    - include: block-comment
+    - match: //
+      scope: punctuation.definition.comment.odin
+      push:
+        - meta_scope: comment.line.double-slash.odin
+        - match: \n
+          pop: true
+    - match: "#!"
+      scope: punctuation.definition.comment.odin
+      push:
+        - meta_scope: comment.line.double-slash.odin
+        - match: \n
+          pop: true
+
+  keywords:
+    - match: \b(import|foreign|package)\b
+      scope: keyword.control.odin
+    - match: \b(if|else|when|for|in|not_in|defer|switch|return|const|do|where)\b
+      scope: keyword.control.odin
+    - match: \b(fallthrough|break|continue|case)\b
+      scope: keyword.control.odin
+    - match: \b(using|([#]force_inline)|([#]force_no_inline))\b
+      scope: keyword.control.odin
+    - match: \b(asm|or_else|or_return|or_break|or_continue)\b
+      scope: keyword.control.odin
+    - match: \b(distinct)\b
+      scope: keyword.operator.odin
+    - match: \b(context)\b
+      scope: keyword.operator.odin
+    - match: '(\!\=)'
+      scope: keyword.operator.odin
+    - match: '(\&\&|\|\||\!)'
+      scope: keyword.logic.odin
+    - match: (->|\!=|==|::|:=?|\?|=|\*=?|/=?|\+=?|-=?|<<=?|>>=?|>=?|<=?|%=?|\^=?|\|=?|\|\|=?|&=?|&&=?|!=?|~=?|!)
+      scope: keyword.operator.odin
+    - match: \b(nil|true|false)\b
+      scope: constant.language.odin
+    - match: '\b(\d(\d|_)*(\.\d(\d|_)*)?)((e|E)(\+|-)?\d+)?[ijk]?\b'
+      scope: constant.numeric.odin
+    - match: '\b((0b(0|1|_)+)|(0o(\d|_)+)|(0d(\d|_)+)|(0[xXh](\h|_)+))[ijk]?\b'
+      scope: constant.numeric.odin
+    - match: '---'
+      scope: constant.numeric.odin
+    - match: \b(struct|enum|union|map|bit_set|bit_field|dynamic|matrix)\b
+      scope: storage.type.odin
+    - match: \b(cast|transmute|auto_cast)\b
+      scope: keyword.function.odin
+    - match: '([#]\s*{{identifier}})'
+      scope: keyword.tag.odin
+
+    # file tags such as #+build -- Note the special rule for comments. File tags
+    # don't follow normal grammar rules.
+    - match: '(#\+\s*)(.*(?=(//|/\*))|.*)'
+      scope: keyword.tag.odin
+
+    - match: '(\x40\s*{{identifier}})'
+      scope: keyword.tag.odin
+    - match: '(\x40\s*[(]\s*{{identifier}})\s*[)]'
+      scope: keyword.tag.odin
+    - match: '@'
+      scope: keyword.operator.odin
+    - match: '(\(|\)|\{|\}|\[|\]|,|;)'
+      scope: punctuation.separator.odin
+
+    # Match & as a bit-wise operator if there is a word, number or right paren
+    # to the left of it. Otherwise: Treat it as a 'pointer'. This is for people
+    # who want to give special colors to pointer-related usage of & and ^.
+    # NOTE(Jeroen): This rule breaks `a := true && false`.
+    # - match: '(?<=[\w|\)])\s*(\&)'
+    #   scope: keyword.operator.odin
+    - match: '(\&|\^)'
+      scope: keyword.operator.pointer.odin
+
+    - match: '(\.)'
+      scope: punctuation.accessor.odin
+      
+    # - match: '(\$)'
+    #   scope: keyword.generic.odin
+
+  functions-and-declarations:
+    - match: '\b({{identifier}})\s*(:)\s*(:)\s*(proc)'
+      captures:
+        1: meta.function.odin entity.name.function.odin
+        2: keyword.operator.odin
+        3: keyword.operator.odin
+        4: storage.type.odin
+
+    - match: '\b({{identifier}})\s*(:)\s*(:)\s*([#]force_inline|[#]force_no_inline)\s+(proc)'
+      captures:
+        1: meta.function.odin entity.name.function.odin
+        2: keyword.operator.odin
+        3: keyword.operator.odin
+        4: keyword.control.odin
+        5: storage.type.odin
+
+    - match: \b(size_of|align_of|offset_of|type_of)\b\s*(\()
+      captures:
+        1: keyword.function.odin
+        2: punctuation.separator.odin
+    - match: \b(type_info_of|typeid_of)\b\s*(\()
+      captures:
+        1: keyword.function.odin
+        2: punctuation.separator.odin
+    - match: (proc)\s*[\(]
+      captures:
+        1: storage.type.odin
+    - match: ({{identifier}})\s*[!]?\s*(\()
+      captures:
+        1: support.function.odin
+        2: punctuation.separator.odin
+    
+    - match: '\b({{identifier}})\s*(:)\s*(:)\s*(struct|union|enum|bit_set)'
+      captures:
+        1: meta.type.odin entity.name.type.odin
+        2: keyword.operator.odin
+        3: keyword.operator.odin
+        4: storage.type.odin
+    
+    - match: '\b({{identifier}})\s*(:)\s*(:)\s*([#]\s*type)'
+      captures:
+        1: meta.type.odin entity.name.type.odin
+        2: keyword.operator.odin
+        3: keyword.operator.odin
+        4: keyword.tag.odin
+
+    - match: '\b({{identifier}})\s*(:)\s*(:)\s*'
+      captures:
+        1: meta.constant.odin entity.name.type.odin
+        2: keyword.operator.odin
+        3: keyword.operator.odin
+        
+
+  types:
+    - match: '\b(struct|enum|union|bit_set)\b(?:(\{)(\}))?'
+      captures:
+        1: storage.type.odin
+        2: meta.block.odin punctuation.definition.block.begin.odin 
+        # 2: meta.block.odin punctuation.separator.odin
+        3: meta.block.odin punctuation.definition.block.end.odin
+    - match: '\b(proc)\b'
+      scope: storage.type.odin
+    - match: (\[)(\d*)(\])(?=[[:alpha:]_])
+      scope: meta.brackets.odin 
+      captures:
+        1: punctuation.definition.brackets.begin.odin punctuation.separator.odin
+        2: constant.numeric.odin
+        3: punctuation.definition.brackets.end.odin punctuation.separator.odin
+    - include: basic-types
+
+    - match: '(\$)\s*({{identifier}})'
+      captures:
+          1: keyword.generic.odin
+          2: storage.type.odin
+
+
+  basic-types:
+    - match: '\b(i8|i16|i32|i64|i128|int)\b'
+      scope: storage.type.odin
+    - match: '\b(u8|u16|u32|u64|u128|uint|uintptr)\b'
+      scope: storage.type.odin
+    - match: '\b(f16|f32|f64)\b'
+      scope: storage.type.odin
+    - match: '\b(f16le|f32le|f64le)\b'
+      scope: storage.type.odin
+    - match: '\b(f16be|f32be|f64be)\b'
+      scope: storage.type.odin
+    - match: '\b(complex32|complex64|complex128)\b'
+      scope: storage.type.odin
+    - match: '\b(quaternion64|quaternion128|quaternion256)\b'
+      scope: storage.type.odin
+    - match: '\b(bool|b8|b16|b32|b64)\b'
+      scope: storage.type.odin
+    - match: '\b(string|cstring|rune)\b'
+      scope: storage.type.odin
+    - match: '\b(rawptr)\b'
+      scope: storage.type.odin
+    - match: '\b(any|typeid)\b'
+      scope: storage.type.odin
+    - match: '\b(byte)\b'
+      scope: storage.type.odin
+
+    - match: '\b(u16le|u32le|u64le|u128le|i16le|i32le|i64le|i128le)\b'
+      scope: storage.type.odin
+    - match: '\b(i16be|i32be|i64be|i128be|u16be|u32be|u64be|u128be)\b'
+      scope: storage.type.odin
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.odin
+      push:
+        - meta_scope: string.quoted.double.odin
+        - match: '"'
+          scope: punctuation.definition.string.end.odin
+          pop: true
+        - include: string-escaped-char
+    - match: "`"
+      scope: punctuation.definition.string.begin.odin
+      push:
+        - meta_scope: string.quoted.raw.odin
+        - match: "`"
+          scope: punctuation.definition.string.end.odin
+          pop: true
+    - match: "'"
+      scope: punctuation.definition.string.begin.odin
+      push:
+        - meta_scope: string.quoted.raw.odin
+        - match: "'"
+          scope: punctuation.definition.string.end.odin
+          pop: true
+        - include: string-escaped-char
+
+  string-escaped-char:
+    - match: '\\(\\|[abefnrutv''"]|x\h{2}|u\h{4}|U\h{8}|[0-7]{3})'
+      scope: constant.character.escape.odin
+    - match: \\.
+      scope: invalid.illegal.unknown-escape.odin

@@ -237,7 +237,7 @@ impl EditorState {
 
         // Initialize marker list with buffer size
         let mut marker_list = MarkerList::new();
-        if buffer.len() > 0 {
+        if !buffer.is_empty() {
             tracing::debug!(
                 "Initializing marker list for file with {} bytes",
                 buffer.len()
@@ -314,7 +314,7 @@ impl EditorState {
 
         // Initialize marker list with buffer size
         let mut marker_list = MarkerList::new();
-        if buffer.len() > 0 {
+        if !buffer.is_empty() {
             tracing::debug!(
                 "Initializing marker list for file with {} bytes",
                 buffer.len()
@@ -844,7 +844,7 @@ fn convert_popup_data_to_popup(data: &PopupData) -> Popup {
         PopupPositionData::BottomRight => PopupPosition::BottomRight,
     };
 
-    let popup = Popup {
+    Popup {
         title: data.title.clone(),
         description: data.description.clone(),
         transient: data.transient,
@@ -856,9 +856,7 @@ fn convert_popup_data_to_popup(data: &PopupData) -> Popup {
         border_style: Style::default().fg(Color::Gray),
         background_style: Style::default().bg(Color::Rgb(30, 30, 30)),
         scroll_offset: 0,
-    };
-
-    popup
+    }
 }
 
 /// Convert margin position data to the actual margin position
@@ -1120,7 +1118,7 @@ impl DocumentModel for EditorState {
 
         // Get line content using iterator
         let mut iter = self.buffer.line_iterator(line_start_offset, 80);
-        if let Some((_start, content)) = iter.next() {
+        if let Some((_start, content)) = iter.next_line() {
             let has_newline = content.ends_with('\n');
             let line_content = if has_newline {
                 content[..content.len() - 1].to_string()
@@ -1212,6 +1210,8 @@ pub struct SemanticTokenStore {
     pub version: u64,
     /// Server-provided result identifier (if any).
     pub result_id: Option<String>,
+    /// Raw semantic token data (u32 array, 5 integers per token).
+    pub data: Vec<u32>,
     /// All semantic token spans resolved to byte ranges.
     pub tokens: Vec<SemanticTokenSpan>,
 }
@@ -1602,7 +1602,7 @@ mod tests {
             state.buffer = Buffer::from_str_test("hello world");
 
             // Initialize marker list for buffer
-            if state.buffer.len() > 0 {
+            if !state.buffer.is_empty() {
                 state.marker_list.adjust_for_insert(0, state.buffer.len());
             }
 
@@ -1640,7 +1640,7 @@ mod tests {
             state.buffer = Buffer::from_str_test("hello world");
 
             // Initialize marker list for buffer
-            if state.buffer.len() > 0 {
+            if !state.buffer.is_empty() {
                 state.marker_list.adjust_for_insert(0, state.buffer.len());
             }
 
@@ -1676,7 +1676,7 @@ mod tests {
             state.buffer = Buffer::from_str_test("hello beautiful world");
 
             // Initialize marker list for buffer
-            if state.buffer.len() > 0 {
+            if !state.buffer.is_empty() {
                 state.marker_list.adjust_for_insert(0, state.buffer.len());
             }
 
@@ -1712,7 +1712,7 @@ mod tests {
             state.buffer = Buffer::from_str_test("let x = 5");
 
             // Initialize marker list for buffer
-            if state.buffer.len() > 0 {
+            if !state.buffer.is_empty() {
                 state.marker_list.adjust_for_insert(0, state.buffer.len());
             }
 
@@ -1753,7 +1753,7 @@ mod tests {
             state.buffer = Buffer::from_str_test("test");
 
             // Initialize marker list for buffer
-            if state.buffer.len() > 0 {
+            if !state.buffer.is_empty() {
                 state.marker_list.adjust_for_insert(0, state.buffer.len());
             }
 

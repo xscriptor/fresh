@@ -960,6 +960,81 @@ fn op_fresh_clear_line_indicators(
     false
 }
 
+/// File explorer decoration entry provided by plugins
+#[derive(serde::Deserialize)]
+struct FileExplorerDecoration {
+    /// Absolute or workspace-relative path to decorate
+    path: String,
+    /// Symbol to display (single character recommended)
+    symbol: Option<String>,
+    /// RGB color for the symbol
+    color: Option<[u8; 3]>,
+    /// Priority for resolving conflicts (higher wins)
+    priority: Option<i32>,
+}
+
+/// Set file explorer decorations for a namespace
+/// @param namespace - Namespace for grouping (e.g., "git-status")
+/// @param decorations - Decoration entries
+/// @returns true if decorations were accepted
+#[op2]
+fn op_fresh_set_file_explorer_decorations(
+    state: &mut OpState,
+    #[string] namespace: String,
+    #[serde] decorations: Vec<FileExplorerDecoration>,
+) -> bool {
+    use crate::view::file_tree::FileExplorerDecoration as ExplorerDecoration;
+    use std::path::PathBuf;
+
+    if let Some(runtime_state) = state.try_borrow::<Rc<RefCell<TsRuntimeState>>>() {
+        let runtime_state = runtime_state.borrow();
+        let decorations: Vec<ExplorerDecoration> = decorations
+            .into_iter()
+            .filter_map(|entry| {
+                if entry.path.is_empty() {
+                    return None;
+                }
+                let symbol = entry.symbol.unwrap_or_else(|| "●".to_string());
+                let color = entry.color.unwrap_or([255, 184, 108]);
+                let priority = entry.priority.unwrap_or(0);
+                Some(ExplorerDecoration {
+                    path: PathBuf::from(entry.path),
+                    symbol,
+                    color: (color[0], color[1], color[2]),
+                    priority,
+                })
+            })
+            .collect();
+
+        let result = runtime_state
+            .command_sender
+            .send(PluginCommand::SetFileExplorerDecorations {
+                namespace,
+                decorations,
+            });
+        return result.is_ok();
+    }
+    false
+}
+
+/// Clear file explorer decorations for a namespace
+/// @param namespace - Namespace to clear (e.g., "git-status")
+/// @returns true if decorations were cleared
+#[op2(fast)]
+fn op_fresh_clear_file_explorer_decorations(
+    state: &mut OpState,
+    #[string] namespace: String,
+) -> bool {
+    if let Some(runtime_state) = state.try_borrow::<Rc<RefCell<TsRuntimeState>>>() {
+        let runtime_state = runtime_state.borrow();
+        let result = runtime_state
+            .command_sender
+            .send(PluginCommand::ClearFileExplorerDecorations { namespace });
+        return result.is_ok();
+    }
+    false
+}
+
 /// Submit a transformed view stream for a viewport
 /// @param buffer_id - Buffer to apply the transform to
 /// @param start - Viewport start byte
@@ -3603,7 +3678,7 @@ async fn op_fresh_get_buffer_text(
 
     match response {
         crate::services::plugins::api::PluginResponse::BufferText { text, .. } => {
-            text.map_err(|e| JsErrorBox::generic(e))
+            text.map_err(JsErrorBox::generic)
         }
         _ => Err(JsErrorBox::generic("Unexpected response type")),
     }
@@ -3814,6 +3889,8 @@ extension!(
         op_fresh_refresh_lines,
         op_fresh_set_line_indicator,
         op_fresh_clear_line_indicators,
+        op_fresh_set_file_explorer_decorations,
+        op_fresh_clear_file_explorer_decorations,
         op_fresh_insert_at_cursor,
         op_fresh_register_command,
         op_fresh_unregister_command,
@@ -4118,6 +4195,12 @@ impl TypeScriptRuntime {
                     },
                     clearLineIndicators(bufferId, namespace) {
                         return core.ops.op_fresh_clear_line_indicators(bufferId, namespace);
+                    },
+                    setFileExplorerDecorations(namespace, decorations) {
+                        return core.ops.op_fresh_set_file_explorer_decorations(namespace, decorations);
+                    },
+                    clearFileExplorerDecorations(namespace) {
+                        return core.ops.op_fresh_clear_file_explorer_decorations(namespace);
                     },
 
                     insertAtCursor(text) {
@@ -4686,7 +4769,7 @@ impl TypeScriptRuntime {
     /// Returns true if there's still pending work, false if all work is done.
     pub fn poll_event_loop_once(&mut self) -> bool {
         let waker = std::task::Waker::noop();
-        let mut cx = std::task::Context::from_waker(&waker);
+        let mut cx = std::task::Context::from_waker(waker);
         match self.js_runtime.poll_event_loop(&mut cx, Default::default()) {
             std::task::Poll::Ready(result) => {
                 if let Err(e) = result {
@@ -6929,7 +7012,7 @@ mod tests {
                 let cmds = handle.process_commands();
                 eprintln!("Commands after load: {:?}", cmds.len());
                 // The vi mode plugin should register the "Toggle Vi mode" command
-                assert!(cmds.len() > 0, "Vi mode plugin should register commands");
+                assert!(!cmds.is_empty(), "Vi mode plugin should register commands");
             }
             Err(e) => {
                 panic!("Vi mode plugin failed to load: {}", e);
@@ -6978,11 +7061,10 @@ mod tests {
         let receiver = handle.execute_action_async("show_git_log").unwrap();
 
         // Simulate editor event loop: process commands while action runs
+        // Note: No internal timeout - cargo nextest handles external timeout per README guidelines
         let mut completed = false;
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(10);
 
-        while !completed && start.elapsed() < timeout {
+        while !completed {
             // Process any commands from the plugin
             let cmds = handle.process_commands();
             for cmd in cmds {
@@ -7027,10 +7109,6 @@ mod tests {
                     panic!("Action receiver disconnected");
                 }
             }
-        }
-
-        if !completed {
-            panic!("Test timed out waiting for show_git_log to complete");
         }
 
         // Shutdown
@@ -7091,11 +7169,10 @@ mod tests {
         let receiver = handle.execute_action_async("test_spawn").unwrap();
 
         // Wait for completion while processing commands
+        // Note: No internal timeout - cargo nextest handles external timeout per README guidelines
         let mut completed = false;
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5);
 
-        while !completed && start.elapsed() < timeout {
+        while !completed {
             let _cmds = handle.process_commands();
             match receiver.try_recv() {
                 Ok(result) => {
@@ -7112,10 +7189,6 @@ mod tests {
                     panic!("Action receiver disconnected");
                 }
             }
-        }
-
-        if !completed {
-            panic!("Test timed out");
         }
 
         // Shutdown
@@ -7178,11 +7251,10 @@ mod tests {
         let receiver = handle.execute_action_async("test_git").unwrap();
 
         // Wait for completion while processing commands
+        // Note: No internal timeout - cargo nextest handles external timeout per README guidelines
         let mut completed = false;
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5);
 
-        while !completed && start.elapsed() < timeout {
+        while !completed {
             let _cmds = handle.process_commands();
             match receiver.try_recv() {
                 Ok(result) => {
@@ -7199,10 +7271,6 @@ mod tests {
                     panic!("Action receiver disconnected");
                 }
             }
-        }
-
-        if !completed {
-            panic!("Test timed out");
         }
 
         // Shutdown
@@ -7277,11 +7345,10 @@ mod tests {
         let receiver = handle.execute_action_async("test_vbuf").unwrap();
 
         // Simulate editor event loop: process commands while action runs
+        // Note: No internal timeout - cargo nextest handles external timeout per README guidelines
         let mut completed = false;
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5);
 
-        while !completed && start.elapsed() < timeout {
+        while !completed {
             // Process any commands from the plugin
             let cmds = handle.process_commands();
             for cmd in cmds {
@@ -7330,10 +7397,6 @@ mod tests {
                     panic!("Action receiver disconnected");
                 }
             }
-        }
-
-        if !completed {
-            panic!("Test timed out waiting for action to complete");
         }
 
         // Shutdown

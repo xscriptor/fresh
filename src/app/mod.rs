@@ -113,6 +113,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 // Re-export BufferId from event module for backward compatibility
 pub use self::types::{BufferKind, BufferMetadata, HoverTarget};
@@ -129,6 +130,29 @@ fn uri_to_path(uri: &lsp_types::Uri) -> Result<PathBuf, String> {
         .map_err(|e| format!("Failed to parse URI: {}", e))?
         .to_file_path()
         .map_err(|_| "URI is not a file path".to_string())
+}
+
+/// Track an in-flight semantic token range request.
+#[derive(Clone, Debug)]
+struct SemanticTokenRangeRequest {
+    buffer_id: BufferId,
+    version: u64,
+    range: Range<usize>,
+    start_line: usize,
+    end_line: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SemanticTokensFullRequestKind {
+    Full,
+    FullDelta,
+}
+
+#[derive(Clone, Debug)]
+struct SemanticTokenFullRequest {
+    buffer_id: BufferId,
+    version: u64,
+    kind: SemanticTokensFullRequestKind,
 }
 
 /// The main editor struct - manages multiple buffers, clipboard, and rendering
@@ -241,6 +265,18 @@ pub struct Editor {
     /// This is the runtime value that can be modified by dragging the border
     file_explorer_width_percent: f32,
 
+    /// Pending show_hidden setting to apply when file explorer is initialized (from session restore)
+    pending_file_explorer_show_hidden: Option<bool>,
+
+    /// Pending show_gitignored setting to apply when file explorer is initialized (from session restore)
+    pending_file_explorer_show_gitignored: Option<bool>,
+
+    /// File explorer decorations by namespace
+    file_explorer_decorations: HashMap<String, Vec<crate::view::file_tree::FileExplorerDecoration>>,
+
+    /// Cached file explorer decorations (resolved + bubbled)
+    file_explorer_decoration_cache: crate::view::file_tree::FileExplorerDecorationCache,
+
     /// Whether menu bar is visible
     menu_bar_visible: bool,
 
@@ -311,11 +347,26 @@ pub struct Editor {
     /// Pending LSP inlay hints request ID (if any)
     pending_inlay_hints_request: Option<u64>,
 
-    /// Pending semantic token requests keyed by LSP request ID -> (buffer_id, buffer_version)
-    pending_semantic_token_requests: HashMap<u64, (BufferId, u64)>,
+    /// Pending semantic token requests keyed by LSP request ID
+    pending_semantic_token_requests: HashMap<u64, SemanticTokenFullRequest>,
 
     /// Track semantic token requests per buffer to prevent duplicate inflight requests
-    semantic_tokens_in_flight: HashMap<BufferId, (u64, u64)>,
+    semantic_tokens_in_flight: HashMap<BufferId, (u64, u64, SemanticTokensFullRequestKind)>,
+
+    /// Pending semantic token range requests keyed by LSP request ID
+    pending_semantic_token_range_requests: HashMap<u64, SemanticTokenRangeRequest>,
+
+    /// Track semantic token range requests per buffer (request_id, start_line, end_line, version)
+    semantic_tokens_range_in_flight: HashMap<BufferId, (u64, usize, usize, u64)>,
+
+    /// Track last semantic token range request per buffer (start_line, end_line, version, time)
+    semantic_tokens_range_last_request: HashMap<BufferId, (usize, usize, u64, Instant)>,
+
+    /// Track last applied semantic token range per buffer (start_line, end_line, version)
+    semantic_tokens_range_applied: HashMap<BufferId, (usize, usize, u64)>,
+
+    /// Next time a full semantic token refresh is allowed for a buffer
+    semantic_tokens_full_debounce: HashMap<BufferId, Instant>,
 
     /// Hover symbol range (byte offsets) - for highlighting the symbol under hover
     /// Format: (start_byte_offset, end_byte_offset)
@@ -416,6 +467,9 @@ pub struct Editor {
 
     /// Last recorded macro register (for F12 to replay)
     last_macro_register: Option<char>,
+
+    /// Flag to prevent recursive macro playback
+    macro_playing: bool,
 
     /// Pending plugin action receivers (for async action execution)
     #[cfg(feature = "plugins")]
@@ -623,6 +677,7 @@ impl Editor {
 
     /// Create a new editor for testing with optional custom backends
     /// Uses empty grammar registry for fast initialization
+    #[allow(clippy::too_many_arguments)]
     pub fn for_test(
         config: Config,
         width: u16,
@@ -650,8 +705,9 @@ impl Editor {
     /// Create a new editor with custom options
     /// This is primarily used for testing with slow or mock backends
     /// to verify editor behavior under various I/O conditions
+    #[allow(clippy::too_many_arguments)]
     fn with_options(
-        config: Config,
+        mut config: Config,
         width: u16,
         height: u16,
         working_dir: Option<PathBuf>,
@@ -672,7 +728,7 @@ impl Editor {
 
         // Canonicalize working_dir to resolve symlinks and normalize path components
         // This ensures consistent path comparisons throughout the editor
-        let working_dir = working_dir.canonicalize().unwrap_or_else(|_| working_dir);
+        let working_dir = working_dir.canonicalize().unwrap_or(working_dir);
 
         // Load theme from config
         let theme = crate::view::theme::Theme::from_name(&config.theme)
@@ -693,11 +749,13 @@ impl Editor {
         let mut event_logs = HashMap::new();
 
         let buffer_id = BufferId(0);
-        let state = EditorState::new(
+        let mut state = EditorState::new(
             width,
             height,
             config.editor.large_file_threshold_bytes as usize,
         );
+        // Apply line_numbers default from config (fixes #539)
+        state.margins.set_line_numbers(config.editor.line_numbers);
         // Note: line_wrap_enabled is now stored in SplitViewState.viewport
         tracing::info!("EditorState created for buffer {:?}", buffer_id);
         buffers.insert(buffer_id, state);
@@ -806,10 +864,18 @@ impl Editor {
                 );
             }
 
-            // Load from all found plugin directories
+            // Load from all found plugin directories, respecting config
             for plugin_dir in plugin_dirs {
                 tracing::info!("Loading TypeScript plugins from: {:?}", plugin_dir);
-                let errors = plugin_manager.load_plugins_from_dir(&plugin_dir);
+                let (errors, discovered_plugins) =
+                    plugin_manager.load_plugins_from_dir_with_config(&plugin_dir, &config.plugins);
+
+                // Merge discovered plugins into config
+                // discovered_plugins already contains the merged config (saved enabled state + discovered path)
+                for (name, plugin_config) in discovered_plugins {
+                    config.plugins.insert(name, plugin_config);
+                }
+
                 if !errors.is_empty() {
                     for err in &errors {
                         tracing::error!("TypeScript plugin load error: {}", err);
@@ -833,12 +899,14 @@ impl Editor {
         let show_menu_bar = config.editor.show_menu_bar;
         let show_tab_bar = config.editor.show_tab_bar;
 
-        // Start periodic update checker if enabled
+        // Start periodic update checker if enabled (also sends daily telemetry)
         let update_checker = if check_for_updates {
             tracing::debug!("Update checking enabled, starting periodic checker");
             Some(
                 crate::services::release_checker::start_periodic_update_check(
                     crate::services::release_checker::DEFAULT_RELEASES_URL,
+                    time_source.clone(),
+                    dir_context.data_dir.clone(),
                 ),
             )
         } else {
@@ -846,7 +914,7 @@ impl Editor {
             None
         };
 
-        Ok(Editor {
+        let mut editor = Editor {
             buffers,
             event_logs,
             next_buffer_id: 1,
@@ -880,7 +948,12 @@ impl Editor {
             file_explorer_visible: false,
             file_explorer_sync_in_progress: false,
             file_explorer_width_percent: file_explorer_width,
+            pending_file_explorer_show_hidden: None,
+            pending_file_explorer_show_gitignored: None,
             menu_bar_visible: show_menu_bar,
+            file_explorer_decorations: HashMap::new(),
+            file_explorer_decoration_cache:
+                crate::view::file_tree::FileExplorerDecorationCache::default(),
             menu_bar_auto_shown: false,
             tab_bar_visible: show_tab_bar,
             mouse_enabled: true,
@@ -904,6 +977,11 @@ impl Editor {
             pending_inlay_hints_request: None,
             pending_semantic_token_requests: HashMap::new(),
             semantic_tokens_in_flight: HashMap::new(),
+            pending_semantic_token_range_requests: HashMap::new(),
+            semantic_tokens_range_in_flight: HashMap::new(),
+            semantic_tokens_range_last_request: HashMap::new(),
+            semantic_tokens_range_applied: HashMap::new(),
+            semantic_tokens_full_debounce: HashMap::new(),
             hover_symbol_range: None,
             hover_symbol_overlay: None,
             mouse_hover_screen_position: None,
@@ -953,6 +1031,7 @@ impl Editor {
             macros: HashMap::new(),
             macro_recording: None,
             last_macro_register: None,
+            macro_playing: false,
             #[cfg(feature = "plugins")]
             pending_plugin_actions: Vec::new(),
             #[cfg(feature = "plugins")]
@@ -1003,7 +1082,20 @@ impl Editor {
             active_action_popup: None,
             composite_buffers: HashMap::new(),
             composite_view_states: HashMap::new(),
-        })
+        };
+
+        #[cfg(feature = "plugins")]
+        {
+            editor.update_plugin_state_snapshot();
+            if editor.plugin_manager.is_active() {
+                editor.plugin_manager.run_hook(
+                    "editor_initialized",
+                    crate::services::plugins::hooks::HookArgs::EditorInitialized,
+                );
+            }
+        }
+
+        Ok(editor)
     }
 
     /// Get a reference to the event broadcaster
@@ -1042,11 +1134,30 @@ impl Editor {
     }
 
     /// Remove a pending semantic token request from tracking maps.
-    fn take_pending_semantic_token_request(&mut self, request_id: u64) -> Option<(BufferId, u64)> {
-        if let Some((buffer_id, version)) = self.pending_semantic_token_requests.remove(&request_id)
+    fn take_pending_semantic_token_request(
+        &mut self,
+        request_id: u64,
+    ) -> Option<SemanticTokenFullRequest> {
+        if let Some(request) = self.pending_semantic_token_requests.remove(&request_id) {
+            self.semantic_tokens_in_flight.remove(&request.buffer_id);
+            Some(request)
+        } else {
+            None
+        }
+    }
+
+    /// Remove a pending semantic token range request from tracking maps.
+    fn take_pending_semantic_token_range_request(
+        &mut self,
+        request_id: u64,
+    ) -> Option<SemanticTokenRangeRequest> {
+        if let Some(request) = self
+            .pending_semantic_token_range_requests
+            .remove(&request_id)
         {
-            self.semantic_tokens_in_flight.remove(&buffer_id);
-            Some((buffer_id, version))
+            self.semantic_tokens_range_in_flight
+                .remove(&request.buffer_id);
+            Some(request)
         } else {
             None
         }
@@ -1677,6 +1788,7 @@ impl Editor {
         match event {
             Event::Insert { .. } | Event::Delete { .. } | Event::BulkEdit { .. } => {
                 self.invalidate_layouts_for_buffer(self.active_buffer());
+                self.schedule_semantic_tokens_full_refresh(self.active_buffer());
             }
             Event::Batch { events, .. } => {
                 let has_edits = events
@@ -1684,6 +1796,7 @@ impl Editor {
                     .any(|e| matches!(e, Event::Insert { .. } | Event::Delete { .. }));
                 if has_edits {
                     self.invalidate_layouts_for_buffer(self.active_buffer());
+                    self.schedule_semantic_tokens_full_refresh(self.active_buffer());
                 }
             }
             _ => {}
@@ -2233,7 +2346,7 @@ impl Editor {
 
                 if let Some(view_state) = view_state {
                     // Recenter viewport on cursor
-                    let cursor = view_state.cursors.primary().clone();
+                    let cursor = *view_state.cursors.primary();
                     let viewport_height = view_state.viewport.visible_line_count();
                     let target_rows_from_top = viewport_height / 2;
 
@@ -2840,9 +2953,7 @@ impl Editor {
         &mut self,
         key: &str,
     ) -> &mut crate::input::input_history::InputHistory {
-        self.prompt_histories
-            .entry(key.to_string())
-            .or_insert_with(crate::input::input_history::InputHistory::new)
+        self.prompt_histories.entry(key.to_string()).or_default()
     }
 
     /// Get a prompt history for the given key (immutable)
@@ -2916,7 +3027,7 @@ impl Editor {
     pub fn get_status_message(&self) -> Option<&String> {
         self.plugin_status_message
             .as_ref()
-            .or_else(|| self.status_message.as_ref())
+            .or(self.status_message.as_ref())
     }
 
     /// Update prompt suggestions based on current input
@@ -3019,7 +3130,7 @@ impl Editor {
     /// - LSP diagnostics
     /// - LSP initialization/errors
     /// - File system changes (future)
-    /// - Git status updates (future)
+    /// - Git status updates
     pub fn process_async_messages(&mut self) -> bool {
         let Some(bridge) = &self.async_bridge else {
             return false;
@@ -3038,6 +3149,8 @@ impl Editor {
                     completion_trigger_characters,
                     semantic_tokens_legend,
                     semantic_tokens_full,
+                    semantic_tokens_full_delta,
+                    semantic_tokens_range,
                 } => {
                     tracing::info!("LSP server initialized for language: {}", language);
                     tracing::debug!(
@@ -3057,6 +3170,8 @@ impl Editor {
                             &language,
                             semantic_tokens_legend,
                             semantic_tokens_full,
+                            semantic_tokens_full_delta,
+                            semantic_tokens_range,
                         );
                     }
 
@@ -3196,9 +3311,9 @@ impl Editor {
                 AsyncMessage::LspSemanticTokens {
                     request_id,
                     uri,
-                    result,
+                    response,
                 } => {
-                    self.handle_lsp_semantic_tokens(request_id, uri, result);
+                    self.handle_lsp_semantic_tokens(request_id, uri, response);
                 }
                 AsyncMessage::LspServerQuiescent { language } => {
                     self.handle_lsp_server_quiescent(language);
@@ -3533,11 +3648,8 @@ impl Editor {
                 });
 
                 // Selected text from primary cursor (for clipboard plugin)
-                snapshot.selected_text = if let Some(range) = primary_selection {
-                    Some(active_state.get_text_range(range.start, range.end))
-                } else {
-                    None
-                };
+                snapshot.selected_text = primary_selection
+                    .map(|range| active_state.get_text_range(range.start, range.end));
 
                 // All cursors
                 snapshot.all_cursors = active_state
@@ -3807,6 +3919,15 @@ impl Editor {
                 namespace,
             } => {
                 self.handle_clear_line_indicators(buffer_id, namespace);
+            }
+            PluginCommand::SetFileExplorerDecorations {
+                namespace,
+                decorations,
+            } => {
+                self.handle_set_file_explorer_decorations(namespace, decorations);
+            }
+            PluginCommand::ClearFileExplorerDecorations { namespace } => {
+                self.handle_clear_file_explorer_decorations(&namespace);
             }
 
             // ==================== Status/Prompt Commands ====================

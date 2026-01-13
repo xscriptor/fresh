@@ -19,8 +19,11 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-static PLUGIN_STRINGS: Lazy<RwLock<HashMap<String, HashMap<String, HashMap<String, String>>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+/// Type alias for the nested plugin strings map.
+/// Structure: plugin_name -> locale -> key -> translated_string
+type PluginStringsMap = HashMap<String, HashMap<String, HashMap<String, String>>>;
+
+static PLUGIN_STRINGS: Lazy<RwLock<PluginStringsMap>> = Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Register strings for a plugin.
 /// format: { "en": { "key": "value" }, "es": { "key": "value" } }
@@ -140,9 +143,7 @@ fn detect_locale() -> Option<String> {
 
     // Fall back to primary language code
     // e.g. "en_US.UTF-8" -> "en"
-    let lang = env_locale
-        .split(|c| c == '_' || c == '-' || c == '.')
-        .next()?;
+    let lang = env_locale.split(['_', '-', '.']).next()?;
     if lang.is_empty() || lang == "C" || lang == "POSIX" {
         None
     } else {

@@ -4,6 +4,8 @@
 
 use rust_i18n::t;
 
+use crate::primitives::display_width::str_width;
+
 use super::items::SettingControl;
 use super::layout::{SettingsHit, SettingsLayout};
 use super::search::SearchResult;
@@ -23,6 +25,7 @@ use ratatui::Frame;
 /// Build spans for a text line with selection highlighting
 ///
 /// Returns a vector of spans where selected portions are highlighted.
+#[allow(clippy::too_many_arguments)]
 fn build_selection_spans(
     display_text: &str,
     display_len: usize,
@@ -141,24 +144,81 @@ pub fn render_settings(
         modal_area.height.saturating_sub(2),
     );
 
-    // Render search header if search is active
-    let (search_header_height, content_area) = if state.search_active {
-        let search_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 2);
-        render_search_header(frame, search_area, state, theme);
-        (
-            2,
-            Rect::new(
-                inner_area.x,
-                inner_area.y + 2,
-                inner_area.width,
-                inner_area.height.saturating_sub(2),
-            ),
-        )
-    } else {
-        (0, inner_area)
-    };
-    let _ = search_header_height; // suppress unused warning
+    // Determine layout mode: vertical (narrow) vs horizontal (wide)
+    // Narrow mode when inner width < 60 columns
+    let narrow_mode = inner_area.width < 60;
 
+    // Always render search bar at the top (1 line when inactive, 2 when active with results)
+    let search_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
+    let search_header_height = if state.search_active {
+        render_search_header(
+            frame,
+            Rect::new(inner_area.x, inner_area.y, inner_area.width, 2),
+            state,
+            theme,
+        );
+        2
+    } else {
+        render_search_hint(frame, search_area, theme);
+        1
+    };
+    let content_area = Rect::new(
+        inner_area.x,
+        inner_area.y + search_header_height,
+        inner_area.width,
+        inner_area.height.saturating_sub(search_header_height),
+    );
+
+    // Create layout tracker
+    let mut layout = SettingsLayout::new(modal_area);
+
+    if narrow_mode {
+        // Vertical layout: categories on top, items below
+        render_vertical_layout(frame, content_area, modal_area, state, theme, &mut layout);
+    } else {
+        // Horizontal layout: categories left, items right
+        render_horizontal_layout(frame, content_area, modal_area, state, theme, &mut layout);
+    }
+
+    // Determine the topmost dialog layer and apply dimming to layers below
+    let has_confirm = state.showing_confirm_dialog;
+    let has_entry = state.showing_entry_dialog();
+    let has_help = state.showing_help;
+
+    // Render confirmation dialog if showing
+    if has_confirm {
+        if !has_entry && !has_help {
+            crate::view::dimming::apply_dimming(frame, modal_area);
+        }
+        render_confirm_dialog(frame, modal_area, state, theme);
+    }
+
+    // Render entry detail dialog if showing
+    if has_entry {
+        if !has_help {
+            crate::view::dimming::apply_dimming(frame, modal_area);
+        }
+        render_entry_dialog(frame, modal_area, state, theme);
+    }
+
+    // Render help overlay if showing
+    if has_help {
+        crate::view::dimming::apply_dimming(frame, modal_area);
+        render_help_overlay(frame, modal_area, theme);
+    }
+
+    layout
+}
+
+/// Render horizontal layout (wide mode): categories left, items right
+fn render_horizontal_layout(
+    frame: &mut Frame,
+    content_area: Rect,
+    modal_area: Rect,
+    state: &mut SettingsState,
+    theme: &Theme,
+    layout: &mut SettingsLayout,
+) {
     // Layout: [left panel (categories)] | [right panel (settings)]
     let chunks =
         Layout::horizontal([Constraint::Length(25), Constraint::Min(40)]).split(content_area);
@@ -166,23 +226,25 @@ pub fn render_settings(
     let categories_area = chunks[0];
     let settings_area = chunks[1];
 
-    // Create layout tracker
-    let mut layout = SettingsLayout::new(modal_area);
-
     // Render category list (left panel)
-    render_categories(frame, categories_area, state, theme, &mut layout);
+    render_categories(frame, categories_area, state, theme, layout);
 
-    // Render separator
+    // Render separator with visual connection to selected category
     let separator_area = Rect::new(
         categories_area.x + categories_area.width,
         categories_area.y,
         1,
         categories_area.height,
     );
-    render_separator(frame, separator_area, theme);
+    render_separator_with_selection(
+        frame,
+        separator_area,
+        theme,
+        state.selected_category,
+        state.pages.len(),
+    );
 
     // Render settings (right panel) or search results
-    // Add horizontal padding from separator
     let horizontal_padding = 2;
     let settings_inner = Rect::new(
         settings_area.x + horizontal_padding,
@@ -192,46 +254,154 @@ pub fn render_settings(
     );
 
     if state.search_active && !state.search_results.is_empty() {
-        render_search_results(frame, settings_inner, state, theme, &mut layout);
+        render_search_results(frame, settings_inner, state, theme, layout);
     } else {
-        render_settings_panel(frame, settings_inner, state, theme, &mut layout);
+        render_settings_panel(frame, settings_inner, state, theme, layout);
     }
 
-    // Render footer with buttons
-    render_footer(frame, modal_area, state, theme, &mut layout);
+    // Render footer with buttons (horizontal layout)
+    render_footer(frame, modal_area, state, theme, layout, false);
+}
 
-    // Determine the topmost dialog layer and apply dimming to layers below
-    let has_confirm = state.showing_confirm_dialog;
-    let has_entry = state.showing_entry_dialog();
-    let has_help = state.showing_help;
+/// Render vertical layout (narrow mode): categories on top, items below
+fn render_vertical_layout(
+    frame: &mut Frame,
+    content_area: Rect,
+    modal_area: Rect,
+    state: &mut SettingsState,
+    theme: &Theme,
+    layout: &mut SettingsLayout,
+) {
+    // Calculate footer height for vertical buttons (5 buttons + separators)
+    let footer_height = 7;
 
-    // Render confirmation dialog if showing
-    if has_confirm {
-        // Dim the main settings modal if confirm is showing
-        // (but only if confirm is the topmost, otherwise entry/help dialog will dim it)
-        if !has_entry && !has_help {
-            crate::view::dimming::apply_dimming(frame, modal_area);
+    // Layout: [categories (3 lines)] / [separator] / [settings] / [footer]
+    let main_height = content_area.height.saturating_sub(footer_height);
+    let category_height = 3u16.min(main_height);
+    let settings_height = main_height.saturating_sub(category_height + 1); // +1 for separator
+
+    // Categories area (horizontal strip at top)
+    let categories_area = Rect::new(
+        content_area.x,
+        content_area.y,
+        content_area.width,
+        category_height,
+    );
+
+    // Separator line
+    let sep_y = content_area.y + category_height;
+
+    // Settings area
+    let settings_area = Rect::new(
+        content_area.x,
+        sep_y + 1,
+        content_area.width,
+        settings_height,
+    );
+
+    // Render horizontal category strip
+    render_categories_horizontal(frame, categories_area, state, theme, layout);
+
+    // Render horizontal separator
+    if sep_y < content_area.y + content_area.height {
+        let sep_line: String = "─".repeat(content_area.width as usize);
+        frame.render_widget(
+            Paragraph::new(sep_line).style(Style::default().fg(theme.split_separator_fg)),
+            Rect::new(content_area.x, sep_y, content_area.width, 1),
+        );
+    }
+
+    // Render settings panel
+    if state.search_active && !state.search_results.is_empty() {
+        render_search_results(frame, settings_area, state, theme, layout);
+    } else {
+        render_settings_panel(frame, settings_area, state, theme, layout);
+    }
+
+    // Render footer with buttons (vertical layout)
+    render_footer(frame, modal_area, state, theme, layout, true);
+}
+
+/// Render categories as a horizontal strip (for narrow mode)
+fn render_categories_horizontal(
+    frame: &mut Frame,
+    area: Rect,
+    state: &SettingsState,
+    theme: &Theme,
+    layout: &mut SettingsLayout,
+) {
+    use super::state::FocusPanel;
+
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+
+    let is_focused = state.focus_panel == FocusPanel::Categories;
+
+    // Build category labels with indicators
+    let mut spans = Vec::new();
+    let mut total_width = 0u16;
+
+    for (i, page) in state.pages.iter().enumerate() {
+        let is_selected = i == state.selected_category;
+        let has_modified = page.items.iter().any(|item| item.modified);
+
+        let indicator = if has_modified { "● " } else { "  " };
+        let name = &page.name;
+
+        let style = if is_selected && is_focused {
+            Style::default()
+                .fg(theme.menu_highlight_fg)
+                .bg(theme.menu_highlight_bg)
+                .add_modifier(Modifier::BOLD)
+        } else if is_selected {
+            Style::default()
+                .fg(theme.menu_highlight_fg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.popup_text_fg)
+        };
+
+        let indicator_style = if has_modified {
+            Style::default().fg(theme.menu_highlight_fg)
+        } else {
+            style
+        };
+
+        // Add separator between categories
+        if i > 0 {
+            spans.push(Span::styled(
+                " │ ",
+                Style::default().fg(theme.split_separator_fg),
+            ));
+            total_width += 3;
         }
-        render_confirm_dialog(frame, modal_area, state, theme);
+
+        spans.push(Span::styled(indicator, indicator_style));
+        spans.push(Span::styled(name.as_str(), style));
+        total_width += (indicator.len() + name.len()) as u16;
+
+        // Track category rect for click handling (approximate)
+        let cat_x = area.x + total_width.saturating_sub((indicator.len() + name.len()) as u16);
+        let cat_width = (indicator.len() + name.len()) as u16;
+        layout
+            .categories
+            .push((i, Rect::new(cat_x, area.y, cat_width, 1)));
     }
 
-    // Render entry detail dialog if showing
-    if has_entry {
-        // Dim everything below (including confirm dialog if visible)
-        if !has_help {
-            crate::view::dimming::apply_dimming(frame, modal_area);
-        }
-        render_entry_dialog(frame, modal_area, state, theme);
-    }
+    // Render the category line
+    let line = Line::from(spans);
+    frame.render_widget(Paragraph::new(line), area);
 
-    // Render help overlay if showing
-    if has_help {
-        // Help is topmost, dim everything below
-        crate::view::dimming::apply_dimming(frame, modal_area);
-        render_help_overlay(frame, modal_area, theme);
+    // Show navigation hint on line 2 if space
+    if area.height >= 2 {
+        let hint = "←→: Switch category";
+        let hint_style = Style::default().fg(theme.line_number_fg);
+        frame.render_widget(
+            Paragraph::new(hint).style(hint_style),
+            Rect::new(area.x, area.y + 1, area.width, 1),
+        );
     }
-
-    layout
 }
 
 /// Render the category list
@@ -293,21 +463,39 @@ fn render_categories(
     }
 }
 
-/// Render vertical separator
-fn render_separator(frame: &mut Frame, area: Rect, theme: &Theme) {
+/// Render vertical separator with visual connection to selected category
+fn render_separator_with_selection(
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    selected_category: usize,
+    category_count: usize,
+) {
+    let sep_style = Style::default().fg(theme.split_separator_fg);
+    let highlight_style = Style::default().fg(theme.menu_highlight_fg);
+
     for y in 0..area.height {
         let cell = Rect::new(area.x, area.y + y, 1, 1);
-        let sep = Paragraph::new("│").style(Style::default().fg(theme.split_separator_fg));
+        let row_idx = y as usize;
+
+        // Create visual connection at the selected category row
+        let (char, style) = if row_idx == selected_category && row_idx < category_count {
+            // Selected row - use a connector character
+            ("┤", highlight_style)
+        } else {
+            ("│", sep_style)
+        };
+
+        let sep = Paragraph::new(char).style(style);
         frame.render_widget(sep, cell);
     }
 }
 
 /// Context for rendering a setting item (extracted to avoid borrow issues)
-struct RenderContext<'a> {
+struct RenderContext {
     selected_item: usize,
     settings_focused: bool,
     hover_hit: Option<SettingsHit>,
-    layer_sources: &'a std::collections::HashMap<String, crate::config_io::ConfigLayer>,
 }
 
 /// Render the settings panel for the current category
@@ -364,8 +552,7 @@ fn render_settings_panel(
     let render_ctx = RenderContext {
         selected_item: state.selected_item,
         settings_focused: state.focus_panel == FocusPanel::Settings,
-        hover_hit: state.hover_hit.clone(),
-        layer_sources: &state.layer_sources,
+        hover_hit: state.hover_hit,
     };
 
     // Area for items (below header)
@@ -477,13 +664,14 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 /// # Arguments
 /// * `skip_top` - Number of rows to skip at top of item (for partial visibility when scrolling)
 /// * `label_width` - Optional label width for column alignment
+#[allow(clippy::too_many_arguments)]
 fn render_setting_item_pure(
     frame: &mut Frame,
     area: Rect,
     item: &super::items::SettingItem,
     idx: usize,
     skip_top: u16,
-    ctx: &RenderContext<'_>,
+    ctx: &RenderContext,
     theme: &Theme,
     label_width: Option<u16>,
 ) -> ControlLayoutInfo {
@@ -504,8 +692,9 @@ fn render_setting_item_pure(
 
     let is_focused_or_hovered = is_selected || is_item_hovered;
 
-    // Focus indicator takes 2 chars ("> ")
-    let focus_indicator_width: u16 = 2;
+    // Indicator area takes 3 chars: [>][●][ ] -> focus, modified, separator
+    // Examples: ">● ", ">  ", " ● ", "   "
+    let focus_indicator_width: u16 = 3;
 
     // Calculate content height - expanded when focused/hovered
     let content_height = if is_focused_or_hovered {
@@ -529,7 +718,7 @@ fn render_setting_item_pure(
         }
     }
 
-    // Render focus indicator ">" for selected items (when settings panel is focused)
+    // Render focus indicator ">" at position 0 for selected items
     if is_selected && skip_top == 0 {
         let indicator_style = Style::default()
             .fg(theme.menu_highlight_fg)
@@ -537,6 +726,15 @@ fn render_setting_item_pure(
         frame.render_widget(
             Paragraph::new(">").style(indicator_style),
             Rect::new(area.x, area.y, 1, 1),
+        );
+    }
+
+    // Render modified indicator "●" at position 1 for items defined in the target layer
+    if item.modified && skip_top == 0 {
+        let modified_style = Style::default().fg(theme.menu_highlight_fg);
+        frame.render_widget(
+            Paragraph::new("●").style(modified_style),
+            Rect::new(area.x + 1, area.y, 1, 1),
         );
     }
 
@@ -556,23 +754,19 @@ fn render_setting_item_pure(
         control_area,
         &item.control,
         &item.name,
-        item.modified,
         skip_top,
         theme,
         label_width.map(|w| w.saturating_sub(focus_indicator_width)),
+        item.read_only,
     );
 
     // Render description below the control (if visible and exists)
     // Description is also offset by focus_indicator_width to align with control
     let desc_start_row = control_height.saturating_sub(skip_top);
 
-    // Get layer source for this item (only show if not default)
-    let layer_source = ctx
-        .layer_sources
-        .get(&item.path)
-        .copied()
-        .unwrap_or(crate::config_io::ConfigLayer::System);
-    let layer_label = match layer_source {
+    // Get layer source label for this item (only show if not default)
+    // We use item.layer_source directly since it's now tracked per-item
+    let layer_label = match item.layer_source {
         crate::config_io::ConfigLayer::System => None, // Don't show for defaults
         crate::config_io::ConfigLayer::User => Some("user"),
         crate::config_io::ConfigLayer::Project => Some("project"),
@@ -639,18 +833,19 @@ fn render_setting_item_pure(
 ///
 /// # Arguments
 /// * `name` - Setting name (for controls that render their own label)
-/// * `modified` - Whether the setting has been modified from default
 /// * `skip_rows` - Number of rows to skip at top of control (for partial visibility)
 /// * `label_width` - Optional label width for column alignment
+/// * `read_only` - Whether this field is read-only (displays as plain text instead of input)
+#[allow(clippy::too_many_arguments)]
 fn render_control(
     frame: &mut Frame,
     area: Rect,
     control: &SettingControl,
     name: &str,
-    modified: bool,
     skip_rows: u16,
     theme: &Theme,
     label_width: Option<u16>,
+    read_only: bool,
 ) -> ControlLayoutInfo {
     match control {
         // Single-row controls: only render if not skipped
@@ -693,10 +888,34 @@ fn render_control(
             if skip_rows > 0 {
                 return ControlLayoutInfo::Text(Rect::default());
             }
-            let colors = TextInputColors::from_theme(theme);
-            let text_layout =
-                render_text_input_aligned(frame, area, state, &colors, 30, label_width);
-            ControlLayoutInfo::Text(text_layout.input_area)
+            if read_only {
+                // Render read-only text as plain text (not editable)
+                let label_w = label_width.unwrap_or(20);
+                let label_style = Style::default().fg(theme.editor_fg);
+                let value_style = Style::default().fg(theme.line_number_fg);
+                let label = format!("{}: ", state.label);
+                let value = &state.value;
+
+                let label_area = Rect::new(area.x, area.y, label_w, 1);
+                let value_area = Rect::new(
+                    area.x + label_w,
+                    area.y,
+                    area.width.saturating_sub(label_w),
+                    1,
+                );
+
+                frame.render_widget(Paragraph::new(label.clone()).style(label_style), label_area);
+                frame.render_widget(
+                    Paragraph::new(value.as_str()).style(value_style),
+                    value_area,
+                );
+                ControlLayoutInfo::Text(Rect::default()) // No clickable area for read-only
+            } else {
+                let colors = TextInputColors::from_theme(theme);
+                let text_layout =
+                    render_text_input_aligned(frame, area, state, &colors, 30, label_width);
+                ControlLayoutInfo::Text(text_layout.input_area)
+            }
         }
 
         // Multi-row controls: pass skip_rows to render partial view
@@ -725,27 +944,25 @@ fn render_control(
                 delete_fg: theme.diagnostic_error_fg,
                 add_fg: theme.syntax_string,
             };
-            let kb_layout =
-                render_keybinding_list_partial(frame, area, state, &colors, skip_rows, modified);
+            let kb_layout = render_keybinding_list_partial(frame, area, state, &colors, skip_rows);
             ControlLayoutInfo::ObjectArray {
                 entry_rows: kb_layout.entry_rects,
             }
         }
 
         SettingControl::Json(state) => {
-            render_json_control(frame, area, state, name, modified, skip_rows, theme)
+            render_json_control(frame, area, state, name, skip_rows, theme)
         }
 
         SettingControl::Complex { type_name } => {
             if skip_rows > 0 {
                 return ControlLayoutInfo::Complex;
             }
-            // Render label with modified indicator
+            // Render label (modified indicator is shown in the row indicator column)
             let label_style = Style::default().fg(theme.editor_fg);
             let value_style = Style::default().fg(theme.line_number_fg);
-            let modified_indicator = if modified { "• " } else { "" };
 
-            let label = Span::styled(format!("{}{}: ", modified_indicator, name), label_style);
+            let label = Span::styled(format!("{}: ", name), label_style);
             let value = Span::styled(
                 format!("<{} - edit in config.toml>", type_name),
                 value_style,
@@ -763,7 +980,6 @@ fn render_json_control(
     area: Rect,
     state: &super::items::JsonEditState,
     name: &str,
-    modified: bool,
     skip_rows: u16,
     theme: &Theme,
 ) -> ControlLayoutInfo {
@@ -798,11 +1014,10 @@ fn render_json_control(
     let mut y = area.y;
     let mut content_row = 0u16;
 
-    // Row 0: label
+    // Row 0: label (modified indicator is shown in the row indicator column)
     if content_row >= skip_rows {
-        let modified_indicator = if modified { "• " } else { "" };
         let label_line = Line::from(vec![Span::styled(
-            format!("{}{}:", modified_indicator, name),
+            format!("{}:", name),
             Style::default().fg(label_color),
         )]);
         frame.render_widget(
@@ -1132,6 +1347,45 @@ fn render_map_partial(
 
     let indent = 2u16;
 
+    // Row 1 is column headers (if display_field is set)
+    if state.display_field.is_some() && y < area.y + area.height {
+        if content_row >= skip_rows {
+            // Derive header name from display_field (e.g., "/enabled" -> "Enabled")
+            let value_header = state
+                .display_field
+                .as_ref()
+                .map(|f| {
+                    let name = f.trim_start_matches('/');
+                    // Capitalize first letter
+                    let mut chars = name.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                    }
+                })
+                .unwrap_or_else(|| "Value".to_string());
+
+            let header_style = Style::default()
+                .fg(colors.label)
+                .add_modifier(Modifier::DIM);
+            let header_line = Line::from(vec![
+                Span::styled(" ".repeat(indent as usize), header_style),
+                Span::styled(
+                    format!("{:width$}", "Name", width = key_width as usize),
+                    header_style,
+                ),
+                Span::raw(" "),
+                Span::styled(value_header, header_style),
+            ]);
+            frame.render_widget(
+                Paragraph::new(header_line),
+                Rect::new(area.x, y, area.width, 1),
+            );
+            y += 1;
+        }
+        content_row += 1;
+    }
+
     // Render entries
     for (idx, (key, value)) in state.entries.iter().enumerate() {
         if y >= area.y + area.height {
@@ -1215,8 +1469,8 @@ fn render_map_partial(
         content_row += 1;
     }
 
-    // Add-new row (always show as button - dialog handles input)
-    let add_row_area = if y < area.y + area.height && content_row >= skip_rows {
+    // Add-new row (only show if adding is allowed)
+    let add_row_area = if !state.no_add && y < area.y + area.height && content_row >= skip_rows {
         let row_area = Rect::new(area.x, y, area.width, 1);
         let is_focused = state.focused_entry.is_none() && state.focus == FocusState::Focused;
 
@@ -1270,7 +1524,6 @@ fn render_keybinding_list_partial(
     state: &crate::view::controls::KeybindingListState,
     colors: &crate::view::controls::KeybindingListColors,
     skip_rows: u16,
-    modified: bool,
 ) -> crate::view::controls::KeybindingListLayout {
     use crate::view::controls::keybinding_list::format_key_combo;
     use crate::view::controls::FocusState;
@@ -1294,11 +1547,10 @@ fn render_keybinding_list_partial(
     let mut content_row = 0u16;
     let mut y = area.y;
 
-    // Render label (row 0)
+    // Render label (row 0) - modified indicator is shown in the row indicator column
     if content_row >= skip_rows {
-        let modified_indicator = if modified { "• " } else { "" };
         let label_line = Line::from(vec![Span::styled(
-            format!("{}{}:", modified_indicator, state.label),
+            format!("{}:", state.label),
             Style::default().fg(colors.label_fg),
         )]);
         frame.render_widget(
@@ -1414,37 +1666,76 @@ pub enum ControlLayoutInfo {
     Complex,
 }
 
+/// Render a single button with focus/hover states
+#[allow(clippy::too_many_arguments)]
+fn render_button(
+    frame: &mut Frame,
+    area: Rect,
+    text: &str,
+    focused_text: &str,
+    is_focused: bool,
+    is_hovered: bool,
+    theme: &Theme,
+    dimmed: bool,
+) {
+    if is_focused {
+        let style = Style::default()
+            .fg(theme.menu_highlight_fg)
+            .bg(theme.menu_highlight_bg)
+            .add_modifier(Modifier::BOLD);
+        frame.render_widget(Paragraph::new(focused_text).style(style), area);
+    } else if is_hovered {
+        let style = Style::default()
+            .fg(theme.menu_hover_fg)
+            .bg(theme.menu_hover_bg);
+        frame.render_widget(Paragraph::new(text).style(style), area);
+    } else {
+        let fg = if dimmed {
+            theme.line_number_fg
+        } else {
+            theme.popup_text_fg
+        };
+        frame.render_widget(Paragraph::new(text).style(Style::default().fg(fg)), area);
+    }
+}
+
 /// Render footer with action buttons
+/// When `vertical` is true, buttons are stacked vertically (for narrow mode)
 fn render_footer(
     frame: &mut Frame,
     modal_area: Rect,
     state: &SettingsState,
     theme: &Theme,
     layout: &mut SettingsLayout,
+    vertical: bool,
 ) {
     use super::layout::SettingsHit;
     use super::state::FocusPanel;
 
-    let footer_y = modal_area.y + modal_area.height - 2;
-    let footer_area = Rect::new(
-        modal_area.x + 1,
-        footer_y,
-        modal_area.width.saturating_sub(2),
-        1,
-    );
+    // Guard against too-small modal
+    if modal_area.height < 4 || modal_area.width < 10 {
+        return;
+    }
 
-    // Draw separator line
-    let sep_area = Rect::new(
-        modal_area.x + 1,
-        footer_y - 1,
-        modal_area.width.saturating_sub(2),
-        1,
-    );
-    let sep_line: String = "─".repeat(sep_area.width as usize);
-    frame.render_widget(
-        Paragraph::new(sep_line).style(Style::default().fg(theme.split_separator_fg)),
-        sep_area,
-    );
+    if vertical {
+        render_footer_vertical(frame, modal_area, state, theme, layout);
+        return;
+    }
+
+    let footer_y = modal_area.y + modal_area.height.saturating_sub(2);
+    let footer_width = modal_area.width.saturating_sub(2);
+    let footer_area = Rect::new(modal_area.x + 1, footer_y, footer_width, 1);
+
+    // Draw separator line (only if we have room above footer)
+    if footer_y > modal_area.y {
+        let sep_y = footer_y.saturating_sub(1);
+        let sep_area = Rect::new(modal_area.x + 1, sep_y, footer_width, 1);
+        let sep_line: String = "─".repeat(sep_area.width as usize);
+        frame.render_widget(
+            Paragraph::new(sep_line).style(Style::default().fg(theme.split_separator_fg)),
+            sep_area,
+        );
+    }
 
     // Check if footer has keyboard focus
     let footer_focused = state.focus_panel == FocusPanel::Footer;
@@ -1463,156 +1754,354 @@ fn render_footer(
     let cancel_focused = footer_focused && state.footer_button_index == 3;
     let edit_focused = footer_focused && state.footer_button_index == 4;
 
-    // Build layer button text dynamically
+    // Get translated button labels
+    let save_label = t!("settings.btn_save").to_string();
+    let cancel_label = t!("settings.btn_cancel").to_string();
+    let reset_label = t!("settings.btn_reset").to_string();
+    let edit_label = t!("settings.btn_edit").to_string();
+
+    // Build button text with brackets (layer button uses layer name)
     let layer_text = format!("[ {} ]", state.target_layer_name());
     let layer_text_focused = format!(">[ {} ]", state.target_layer_name());
+    let save_text = format!("[ {} ]", save_label);
+    let save_text_focused = format!(">[ {} ]", save_label);
+    let cancel_text = format!("[ {} ]", cancel_label);
+    let cancel_text_focused = format!(">[ {} ]", cancel_label);
+    let reset_text = format!("[ {} ]", reset_label);
+    let reset_text_focused = format!(">[ {} ]", reset_label);
+    let edit_text = format!("[ {} ]", edit_label);
+    let edit_text_focused = format!(">[ {} ]", edit_label);
 
-    // Calculate button positions from right (main buttons)
-    // When focused, buttons get a ">" prefix adding 1 char
-    let cancel_width = if cancel_focused { 11 } else { 10 }; // ">[ Cancel ]" or "[ Cancel ]"
-    let save_width = if save_focused { 9 } else { 8 }; // ">[ Save ]" or "[ Save ]"
-    let reset_width = if reset_focused { 10 } else { 9 }; // ">[ Reset ]" or "[ Reset ]"
-    let layer_width = if layer_focused {
-        layer_text_focused.len() as u16
+    // Calculate button widths using display width (handles unicode)
+    let cancel_width = str_width(if cancel_focused {
+        &cancel_text_focused
     } else {
-        layer_text.len() as u16
+        &cancel_text
+    }) as u16;
+    let save_width = str_width(if save_focused {
+        &save_text_focused
+    } else {
+        &save_text
+    }) as u16;
+    let reset_width = str_width(if reset_focused {
+        &reset_text_focused
+    } else {
+        &reset_text
+    }) as u16;
+    let layer_width = str_width(if layer_focused {
+        &layer_text_focused
+    } else {
+        &layer_text
+    }) as u16;
+    let edit_width = str_width(if edit_focused {
+        &edit_text_focused
+    } else {
+        &edit_text
+    }) as u16;
+    let gap: u16 = 2;
+
+    // Calculate total width needed for all buttons
+    // Minimum needed: Save + Cancel
+    let min_buttons_width = save_width + gap + cancel_width;
+    // Full buttons: Edit + Layer + Reset + Save + Cancel with gaps
+    let all_buttons_width =
+        edit_width + gap + layer_width + gap + reset_width + gap + save_width + gap + cancel_width;
+
+    // Determine which buttons to show based on available width
+    let available = footer_area.width;
+    let show_edit = available >= all_buttons_width;
+    let show_layer = available >= (layer_width + gap + reset_width + gap + min_buttons_width);
+    let show_reset = available >= (reset_width + gap + min_buttons_width);
+
+    // Calculate X positions using saturating_sub to prevent overflow
+    let cancel_x = footer_area
+        .x
+        .saturating_add(footer_area.width.saturating_sub(cancel_width));
+    let save_x = cancel_x.saturating_sub(save_width + gap);
+    let reset_x = if show_reset {
+        save_x.saturating_sub(reset_width + gap)
+    } else {
+        0
     };
-    let gap = 2;
-
-    let cancel_x = footer_area.x + footer_area.width - cancel_width;
-    let save_x = cancel_x - save_width - gap;
-    let reset_x = save_x - reset_width - gap;
-    let layer_x = reset_x - layer_width - gap;
-
-    // Edit button on left (separated for advanced users)
-    let edit_width = if edit_focused { 9 } else { 8 }; // ">[ Edit ]" or "[ Edit ]"
+    let layer_x = if show_layer {
+        reset_x.saturating_sub(layer_width + gap)
+    } else {
+        0
+    };
     let edit_x = footer_area.x; // Left-aligned
 
-    // Render buttons with focus indicators
-    // Layer button
-    let layer_area = Rect::new(layer_x, footer_y, layer_width, 1);
-    if layer_focused {
-        let style = Style::default()
-            .fg(theme.menu_highlight_fg)
-            .bg(theme.menu_highlight_bg)
-            .add_modifier(Modifier::BOLD);
-        frame.render_widget(
-            Paragraph::new(layer_text_focused.as_str()).style(style),
+    // Render buttons using helper function
+    // Layer button (conditionally shown)
+    if show_layer {
+        let layer_area = Rect::new(layer_x, footer_y, layer_width, 1);
+        render_button(
+            frame,
             layer_area,
+            &layer_text,
+            &layer_text_focused,
+            layer_focused,
+            layer_hovered,
+            theme,
+            false,
         );
-    } else if layer_hovered {
-        let style = Style::default()
-            .fg(theme.menu_hover_fg)
-            .bg(theme.menu_hover_bg);
-        frame.render_widget(Paragraph::new(layer_text.as_str()).style(style), layer_area);
-    } else {
-        frame.render_widget(
-            Paragraph::new(layer_text.as_str()).style(Style::default().fg(theme.popup_text_fg)),
-            layer_area,
-        );
+        layout.layer_button = Some(layer_area);
     }
-    layout.layer_button = Some(layer_area);
 
-    // Reset button
-    let reset_area = Rect::new(reset_x, footer_y, reset_width, 1);
-    if reset_focused {
-        let style = Style::default()
-            .fg(theme.menu_highlight_fg)
-            .bg(theme.menu_highlight_bg)
-            .add_modifier(Modifier::BOLD);
-        frame.render_widget(Paragraph::new(">[ Reset ]").style(style), reset_area);
-    } else if reset_hovered {
-        let style = Style::default()
-            .fg(theme.menu_hover_fg)
-            .bg(theme.menu_hover_bg);
-        frame.render_widget(Paragraph::new("[ Reset ]").style(style), reset_area);
-    } else {
-        frame.render_widget(
-            Paragraph::new("[ Reset ]").style(Style::default().fg(theme.popup_text_fg)),
+    // Reset button (conditionally shown)
+    if show_reset {
+        let reset_area = Rect::new(reset_x, footer_y, reset_width, 1);
+        render_button(
+            frame,
             reset_area,
+            &reset_text,
+            &reset_text_focused,
+            reset_focused,
+            reset_hovered,
+            theme,
+            false,
         );
+        layout.reset_button = Some(reset_area);
     }
-    layout.reset_button = Some(reset_area);
 
-    // Save button
+    // Save button (always shown)
     let save_area = Rect::new(save_x, footer_y, save_width, 1);
-    if save_focused {
-        let style = Style::default()
-            .fg(theme.menu_highlight_fg)
-            .bg(theme.menu_highlight_bg)
-            .add_modifier(Modifier::BOLD);
-        frame.render_widget(Paragraph::new(">[ Save ]").style(style), save_area);
-    } else if save_hovered {
-        let style = Style::default()
-            .fg(theme.menu_hover_fg)
-            .bg(theme.menu_hover_bg);
-        frame.render_widget(Paragraph::new("[ Save ]").style(style), save_area);
-    } else {
-        frame.render_widget(
-            Paragraph::new("[ Save ]").style(Style::default().fg(theme.popup_text_fg)),
-            save_area,
-        );
-    }
+    render_button(
+        frame,
+        save_area,
+        &save_text,
+        &save_text_focused,
+        save_focused,
+        save_hovered,
+        theme,
+        false,
+    );
     layout.save_button = Some(save_area);
 
-    // Cancel button
+    // Cancel button (always shown)
     let cancel_area = Rect::new(cancel_x, footer_y, cancel_width, 1);
-    if cancel_focused {
-        let style = Style::default()
-            .fg(theme.menu_highlight_fg)
-            .bg(theme.menu_highlight_bg)
-            .add_modifier(Modifier::BOLD);
-        frame.render_widget(Paragraph::new(">[ Cancel ]").style(style), cancel_area);
-    } else if cancel_hovered {
-        let style = Style::default()
-            .fg(theme.menu_hover_fg)
-            .bg(theme.menu_hover_bg);
-        frame.render_widget(Paragraph::new("[ Cancel ]").style(style), cancel_area);
-    } else {
-        frame.render_widget(
-            Paragraph::new("[ Cancel ]").style(Style::default().fg(theme.popup_text_fg)),
-            cancel_area,
-        );
-    }
+    render_button(
+        frame,
+        cancel_area,
+        &cancel_text,
+        &cancel_text_focused,
+        cancel_focused,
+        cancel_hovered,
+        theme,
+        false,
+    );
     layout.cancel_button = Some(cancel_area);
 
-    // Edit button (on left, for advanced users)
-    let edit_area = Rect::new(edit_x, footer_y, edit_width, 1);
-    if edit_focused {
-        let style = Style::default()
-            .fg(theme.menu_highlight_fg)
-            .bg(theme.menu_highlight_bg)
-            .add_modifier(Modifier::BOLD);
-        frame.render_widget(Paragraph::new(">[ Edit ]").style(style), edit_area);
-    } else if edit_hovered {
-        let style = Style::default()
-            .fg(theme.menu_hover_fg)
-            .bg(theme.menu_hover_bg);
-        frame.render_widget(Paragraph::new("[ Edit ]").style(style), edit_area);
-    } else {
-        // Dim style for advanced option
-        frame.render_widget(
-            Paragraph::new("[ Edit ]").style(Style::default().fg(theme.line_number_fg)),
+    // Edit button (on left, for advanced users, conditionally shown)
+    if show_edit {
+        let edit_area = Rect::new(edit_x, footer_y, edit_width, 1);
+        render_button(
+            frame,
             edit_area,
+            &edit_text,
+            &edit_text_focused,
+            edit_focused,
+            edit_hovered,
+            theme,
+            true, // dimmed for advanced option
         );
+        layout.edit_button = Some(edit_area);
     }
-    layout.edit_button = Some(edit_area);
 
     // Help text (between Edit button and main buttons)
-    let help_x = edit_x + edit_width + 2;
-    let help_width = layer_x.saturating_sub(help_x + 1);
-    let help = if state.search_active {
-        "Type to search, ↑↓:Navigate  Enter:Jump  Esc:Cancel"
-    } else if footer_focused {
-        "Tab:Next button  Enter:Activate  Esc:Close"
+    // Calculate position based on which buttons are visible
+    let help_start_x = if show_edit {
+        edit_x + edit_width + 2
     } else {
-        "↑↓:Navigate  Tab:Next  Enter:Edit  /:Search  Esc:Close"
+        footer_area.x
+    };
+    let help_end_x = if show_layer {
+        layer_x
+    } else if show_reset {
+        reset_x
+    } else {
+        save_x
+    };
+    let help_width = help_end_x.saturating_sub(help_start_x + 1);
+
+    // Get translated help text
+    let help = if state.search_active {
+        t!("settings.help_search").to_string()
+    } else if footer_focused {
+        t!("settings.help_footer").to_string()
+    } else {
+        t!("settings.help_default").to_string()
     };
     let help_style = Style::default().fg(theme.line_number_fg);
     frame.render_widget(
-        Paragraph::new(help).style(help_style),
-        Rect::new(help_x, footer_y, help_width, 1),
+        Paragraph::new(help.as_str()).style(help_style),
+        Rect::new(help_start_x, footer_y, help_width, 1),
     );
+}
+
+/// Render footer with buttons stacked vertically (for narrow mode)
+fn render_footer_vertical(
+    frame: &mut Frame,
+    modal_area: Rect,
+    state: &SettingsState,
+    theme: &Theme,
+    layout: &mut SettingsLayout,
+) {
+    use super::layout::SettingsHit;
+    use super::state::FocusPanel;
+
+    // Footer takes bottom 7 lines: separator + 5 buttons + help
+    let footer_height = 7u16;
+    let footer_y = modal_area
+        .y
+        .saturating_add(modal_area.height.saturating_sub(footer_height));
+    let footer_width = modal_area.width.saturating_sub(2);
+
+    // Draw top separator
+    let sep_y = footer_y;
+    if sep_y > modal_area.y {
+        let sep_line: String = "─".repeat(footer_width as usize);
+        frame.render_widget(
+            Paragraph::new(sep_line).style(Style::default().fg(theme.split_separator_fg)),
+            Rect::new(modal_area.x + 1, sep_y, footer_width, 1),
+        );
+    }
+
+    // Check if footer has keyboard focus
+    let footer_focused = state.focus_panel == FocusPanel::Footer;
+
+    // Determine hover and keyboard focus states for buttons
+    let layer_hovered = matches!(state.hover_hit, Some(SettingsHit::LayerButton));
+    let reset_hovered = matches!(state.hover_hit, Some(SettingsHit::ResetButton));
+    let save_hovered = matches!(state.hover_hit, Some(SettingsHit::SaveButton));
+    let cancel_hovered = matches!(state.hover_hit, Some(SettingsHit::CancelButton));
+    let edit_hovered = matches!(state.hover_hit, Some(SettingsHit::EditButton));
+
+    let layer_focused = footer_focused && state.footer_button_index == 0;
+    let reset_focused = footer_focused && state.footer_button_index == 1;
+    let save_focused = footer_focused && state.footer_button_index == 2;
+    let cancel_focused = footer_focused && state.footer_button_index == 3;
+    let edit_focused = footer_focused && state.footer_button_index == 4;
+
+    // Get translated button labels
+    let save_label = t!("settings.btn_save").to_string();
+    let cancel_label = t!("settings.btn_cancel").to_string();
+    let reset_label = t!("settings.btn_reset").to_string();
+    let edit_label = t!("settings.btn_edit").to_string();
+
+    // Build button text
+    let layer_text = format!("[ {} ]", state.target_layer_name());
+    let layer_text_focused = format!(">[ {} ]", state.target_layer_name());
+    let save_text = format!("[ {} ]", save_label);
+    let save_text_focused = format!(">[ {} ]", save_label);
+    let cancel_text = format!("[ {} ]", cancel_label);
+    let cancel_text_focused = format!(">[ {} ]", cancel_label);
+    let reset_text = format!("[ {} ]", reset_label);
+    let reset_text_focused = format!(">[ {} ]", reset_label);
+    let edit_text = format!("[ {} ]", edit_label);
+    let edit_text_focused = format!(">[ {} ]", edit_label);
+
+    // Render buttons vertically, centered
+    let button_x = modal_area.x + 2;
+    let mut y = sep_y + 1;
+
+    // Layer button
+    let layer_width = str_width(if layer_focused {
+        &layer_text_focused
+    } else {
+        &layer_text
+    }) as u16;
+    let layer_area = Rect::new(button_x, y, layer_width.min(footer_width), 1);
+    render_button(
+        frame,
+        layer_area,
+        &layer_text,
+        &layer_text_focused,
+        layer_focused,
+        layer_hovered,
+        theme,
+        false,
+    );
+    layout.layer_button = Some(layer_area);
+    y += 1;
+
+    // Save button
+    let save_width = str_width(if save_focused {
+        &save_text_focused
+    } else {
+        &save_text
+    }) as u16;
+    let save_area = Rect::new(button_x, y, save_width.min(footer_width), 1);
+    render_button(
+        frame,
+        save_area,
+        &save_text,
+        &save_text_focused,
+        save_focused,
+        save_hovered,
+        theme,
+        false,
+    );
+    layout.save_button = Some(save_area);
+    y += 1;
+
+    // Reset button
+    let reset_width = str_width(if reset_focused {
+        &reset_text_focused
+    } else {
+        &reset_text
+    }) as u16;
+    let reset_area = Rect::new(button_x, y, reset_width.min(footer_width), 1);
+    render_button(
+        frame,
+        reset_area,
+        &reset_text,
+        &reset_text_focused,
+        reset_focused,
+        reset_hovered,
+        theme,
+        false,
+    );
+    layout.reset_button = Some(reset_area);
+    y += 1;
+
+    // Cancel button
+    let cancel_width = str_width(if cancel_focused {
+        &cancel_text_focused
+    } else {
+        &cancel_text
+    }) as u16;
+    let cancel_area = Rect::new(button_x, y, cancel_width.min(footer_width), 1);
+    render_button(
+        frame,
+        cancel_area,
+        &cancel_text,
+        &cancel_text_focused,
+        cancel_focused,
+        cancel_hovered,
+        theme,
+        false,
+    );
+    layout.cancel_button = Some(cancel_area);
+    y += 1;
+
+    // Edit button
+    let edit_width = str_width(if edit_focused {
+        &edit_text_focused
+    } else {
+        &edit_text
+    }) as u16;
+    let edit_area = Rect::new(button_x, y, edit_width.min(footer_width), 1);
+    render_button(
+        frame,
+        edit_area,
+        &edit_text,
+        &edit_text_focused,
+        edit_focused,
+        edit_hovered,
+        theme,
+        true, // dimmed
+    );
+    layout.edit_button = Some(edit_area);
 }
 
 /// Render the search header with query input
@@ -1653,6 +2142,22 @@ fn render_search_header(frame: &mut Frame, area: Rect, state: &SettingsState, th
         Paragraph::new(count_text).style(count_style),
         Rect::new(area.x, area.y + 1, area.width, 1),
     );
+}
+
+/// Render search hint when search is not active
+fn render_search_hint(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let hint_style = Style::default().fg(theme.line_number_fg);
+    let key_style = Style::default()
+        .fg(theme.menu_highlight_fg)
+        .add_modifier(Modifier::BOLD);
+
+    let spans = vec![
+        Span::styled("🔍 ", hint_style),
+        Span::styled("/", key_style),
+        Span::styled(" to search settings...", hint_style),
+    ];
+    let line = Line::from(spans);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// Render search results with breadcrumbs
@@ -1932,7 +2437,7 @@ fn render_entry_dialog(
     };
 
     // Calculate dialog size - use most of available space for editing
-    let dialog_width = (parent_area.width * 85 / 100).min(90).max(50);
+    let dialog_width = (parent_area.width * 85 / 100).clamp(50, 90);
     let dialog_height = (parent_area.height * 90 / 100).max(15);
     let dialog_x = parent_area.x + (parent_area.width.saturating_sub(dialog_width)) / 2;
     let dialog_y = parent_area.y + (parent_area.height.saturating_sub(dialog_height)) / 2;
@@ -1984,7 +2489,39 @@ fn render_entry_dialog(
     let mut content_y: usize = 0;
     let mut screen_y = inner.y;
 
+    // Track if we need to render a separator (between read-only and editable items)
+    let first_editable = dialog.first_editable_index;
+    let has_readonly_items = first_editable > 0;
+    let has_editable_items = first_editable < dialog.items.len();
+    let needs_separator = has_readonly_items && has_editable_items;
+
     for (idx, item) in dialog.items.iter().enumerate() {
+        // Render separator before first editable item
+        if needs_separator && idx == first_editable {
+            // Add separator row to content height calculation
+            let separator_start = content_y;
+            let separator_end = content_y + 1;
+
+            if separator_end > scroll_offset && screen_y < inner.y + inner.height {
+                // Separator is visible
+                let skip_sep = if separator_start < scroll_offset {
+                    1
+                } else {
+                    0
+                };
+                if skip_sep == 0 {
+                    let sep_style = Style::default().fg(theme.line_number_fg);
+                    let separator_line = "─".repeat(inner.width.saturating_sub(2) as usize);
+                    frame.render_widget(
+                        Paragraph::new(separator_line).style(sep_style),
+                        Rect::new(inner.x + 1, screen_y, inner.width.saturating_sub(2), 1),
+                    );
+                    screen_y += 1;
+                }
+            }
+            content_y = separator_end;
+        }
+
         let control_height = item.control.control_height() as usize;
 
         // Check if this item is visible in the viewport
@@ -2019,10 +2556,12 @@ fn render_entry_dialog(
             continue;
         }
 
-        let is_focused = !dialog.focus_on_buttons && dialog.selected_item == idx;
-        let is_hovered = dialog.hover_item == Some(idx);
+        // Read-only items are not focusable - no focus/hover highlighting
+        let is_readonly = item.read_only;
+        let is_focused = !is_readonly && !dialog.focus_on_buttons && dialog.selected_item == idx;
+        let is_hovered = !is_readonly && dialog.hover_item == Some(idx);
 
-        // Draw selection or hover highlight background
+        // Draw selection or hover highlight background (only for editable items)
         if is_focused || is_hovered {
             let bg_style = if is_focused {
                 Style::default().bg(theme.current_line_bg)
@@ -2035,8 +2574,11 @@ fn render_entry_dialog(
             }
         }
 
-        // Render focus indicator ">" for the focused item
-        let focus_indicator_width: u16 = 2; // "> "
+        // Indicator area takes 3 chars: [>][●][ ] -> focus, modified, separator
+        // Examples: ">● ", ">  ", " ● ", "   "
+        let focus_indicator_width: u16 = 3;
+
+        // Render focus indicator ">" at position 0 for the focused item
         if is_focused && skip_rows == 0 {
             let indicator_style = Style::default()
                 .fg(theme.menu_highlight_fg)
@@ -2044,6 +2586,15 @@ fn render_entry_dialog(
             frame.render_widget(
                 Paragraph::new(">").style(indicator_style),
                 Rect::new(inner.x, screen_y, 1, 1),
+            );
+        }
+
+        // Render modified indicator "●" at position 1 for modified items
+        if item.modified && skip_rows == 0 {
+            let modified_style = Style::default().fg(theme.menu_highlight_fg);
+            frame.render_widget(
+                Paragraph::new("●").style(modified_style),
+                Rect::new(inner.x + 1, screen_y, 1, 1),
             );
         }
 
@@ -2061,10 +2612,10 @@ fn render_entry_dialog(
             control_area,
             &item.control,
             &item.name,
-            item.modified,
             skip_rows,
             theme,
             Some(label_col_width.saturating_sub(focus_indicator_width)),
+            item.read_only,
         );
 
         screen_y += render_height as u16;
@@ -2085,7 +2636,8 @@ fn render_entry_dialog(
 
     // Render buttons at bottom
     let button_y = dialog_area.y + dialog_area.height - 2;
-    let buttons: Vec<&str> = if dialog.is_new {
+    // New entries and no_delete entries only show Save/Cancel (no Delete)
+    let buttons: Vec<&str> = if dialog.is_new || dialog.no_delete {
         vec!["[ Save ]", "[ Cancel ]"]
     } else {
         vec!["[ Save ]", "[ Delete ]", "[ Cancel ]"]
@@ -2097,7 +2649,7 @@ fn render_entry_dialog(
     for (idx, label) in buttons.iter().enumerate() {
         let is_selected = dialog.focus_on_buttons && dialog.focused_button == idx;
         let is_hovered = dialog.hover_button == Some(idx);
-        let is_delete = !dialog.is_new && idx == 1;
+        let is_delete = !dialog.is_new && !dialog.no_delete && idx == 1;
         let style = if is_selected {
             Style::default()
                 .fg(theme.menu_highlight_fg)

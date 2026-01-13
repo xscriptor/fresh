@@ -303,6 +303,12 @@ impl EditorStateSnapshot {
     }
 }
 
+impl Default for EditorStateSnapshot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Position for inserting menu items or menus
 #[derive(Debug, Clone)]
 pub enum MenuPosition {
@@ -497,6 +503,20 @@ pub enum PluginCommand {
     ClearLineIndicators {
         buffer_id: BufferId,
         /// Namespace to clear (e.g., "git-gutter")
+        namespace: String,
+    },
+
+    /// Set file explorer decorations for a namespace
+    SetFileExplorerDecorations {
+        /// Namespace for grouping (e.g., "git-status")
+        namespace: String,
+        /// Decorations to apply
+        decorations: Vec<crate::view::file_tree::FileExplorerDecoration>,
+    },
+
+    /// Clear file explorer decorations for a namespace
+    ClearFileExplorerDecorations {
+        /// Namespace to clear (e.g., "git-status")
         namespace: String,
     },
 
@@ -970,6 +990,7 @@ impl PluginApi {
 
     /// Add an overlay (decoration) to a buffer
     /// Returns an opaque handle that can be used to remove the overlay later
+    #[allow(clippy::too_many_arguments)]
     pub fn add_overlay(
         &self,
         buffer_id: BufferId,

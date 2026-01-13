@@ -1,213 +1,117 @@
 /// <reference path="./lib/fresh.d.ts" />
 
-import {
-  ResultsPanel,
-  ResultItem,
-  createStaticProvider,
-  getRelativePath,
-} from "./lib/results-panel.ts";
-
-const editor = getEditor();
-
 /**
  * Find References Plugin
  *
- * Displays LSP find references results using the ResultsPanel abstraction
- * with VS Code-inspired Provider pattern.
- *
- * Key features:
- * - Provider pattern for live data channel
- * - syncWithEditor for bidirectional cursor sync
- * - groupBy: "file" for organized display
+ * Displays LSP find references results using the Finder abstraction
+ * with filter mode for unified prompt-based UX.
  */
 
-// Maximum number of results to display
-const MAX_RESULTS = 100;
+import { Finder, getRelativePath } from "./lib/finder.ts";
 
-// Reference item structure from LSP
+const editor = getEditor();
+
+// Reference location from LSP
 interface ReferenceLocation {
   file: string;
   line: number;
   column: number;
+  content?: string;
 }
 
-// Line text cache for previews
-const lineCache: Map<string, string[]> = new Map();
-
-// Create a static provider (Find References is a snapshot, not live data)
-const provider = createStaticProvider<ResultItem>();
-
-// Create the panel with Provider pattern
-const panel = new ResultsPanel(editor, "references", provider, {
-  title: "References", // Will be updated when showing
-  syncWithEditor: true, // Enable bidirectional cursor sync!
-  groupBy: "file", // Group by file for better organization
-  ratio: 0.7,
-  onSelect: (item) => {
-    if (item.location) {
-      panel.openInSource(
-        item.location.file,
-        item.location.line,
-        item.location.column
-      );
-      const displayPath = getRelativePath(editor, item.location.file);
-      editor.setStatus(`Jumped to ${displayPath}:${item.location.line}`);
-    }
-  },
-  onClose: () => {
-    lineCache.clear();
-  },
-});
-
-/**
- * Load line text for references (for preview display)
- */
-async function loadLineTexts(
-  references: ReferenceLocation[]
-): Promise<Map<string, string>> {
-  const lineTexts = new Map<string, string>();
-
-  // Group references by file
-  const fileRefs: Map<string, ReferenceLocation[]> = new Map();
-  for (const ref of references) {
-    if (!fileRefs.has(ref.file)) {
-      fileRefs.set(ref.file, []);
-    }
-    fileRefs.get(ref.file)!.push(ref);
-  }
-
-  // Load each file and extract lines
-  for (const [filePath, refs] of fileRefs) {
-    try {
-      let lines = lineCache.get(filePath);
-      if (!lines) {
-        const content = await editor.readFile(filePath);
-        lines = content.split("\n");
-        lineCache.set(filePath, lines);
-      }
-
-      for (const ref of refs) {
-        const lineIndex = ref.line - 1;
-        if (lineIndex >= 0 && lineIndex < lines.length) {
-          const key = `${ref.file}:${ref.line}:${ref.column}`;
-          lineTexts.set(key, lines[lineIndex]);
-        }
-      }
-    } catch {
-      // If file can't be read, skip
-    }
-  }
-
-  return lineTexts;
-}
-
-/**
- * Convert LSP references to ResultItems for display
- */
-function referencesToItems(
-  references: ReferenceLocation[],
-  lineTexts: Map<string, string>
-): ResultItem[] {
-  return references.map((ref, index) => {
+// Create the finder instance - same UX as grep plugins
+const finder = new Finder<ReferenceLocation>(editor, {
+  id: "references",
+  format: (ref) => {
     const displayPath = getRelativePath(editor, ref.file);
-    const key = `${ref.file}:${ref.line}:${ref.column}`;
-    const lineText = lineTexts.get(key) || "";
-    const trimmedLine = lineText.trim();
-
-    // Format label as "line:col"
-    const label = `${ref.line}:${ref.column}`;
-
-    // Preview text
-    const maxPreviewLen = 60;
-    const preview =
-      trimmedLine.length > maxPreviewLen
-        ? trimmedLine.slice(0, maxPreviewLen - 3) + "..."
-        : trimmedLine;
+    const content = ref.content?.trim() ?? "";
+    const description =
+      content.length > 60 ? content.substring(0, 57) + "..." : content;
 
     return {
-      // Unique ID for reveal/sync
-      id: `ref-${index}-${ref.file}-${ref.line}-${ref.column}`,
-      label: label,
-      description: preview,
+      label: `${displayPath}:${ref.line}`,
+      description,
       location: {
         file: ref.file,
         line: ref.line,
         column: ref.column,
       },
     };
-  });
-}
+  },
+  preview: true,
+  maxResults: 100,
+});
+
+// Pending references for the current prompt
+let pendingRefs: ReferenceLocation[] = [];
 
 /**
- * Show references panel with the given results
+ * Load line content for references
  */
-async function showReferences(
-  symbol: string,
-  references: ReferenceLocation[]
-): Promise<void> {
-  // Limit results
-  const limitedRefs = references.slice(0, MAX_RESULTS);
+async function loadLineContent(
+  refs: ReferenceLocation[]
+): Promise<ReferenceLocation[]> {
+  const result: ReferenceLocation[] = [];
+  const fileCache = new Map<string, string[]>();
 
-  // Clear and reload line cache
-  lineCache.clear();
-  const lineTexts = await loadLineTexts(limitedRefs);
+  for (const ref of refs) {
+    let lines: string[];
+    const cached = fileCache.get(ref.file);
+    if (cached !== undefined) {
+      lines = cached;
+    } else {
+      try {
+        const content = await editor.readFile(ref.file);
+        lines = content.split("\n");
+      } catch {
+        lines = [];
+      }
+      fileCache.set(ref.file, lines);
+    }
 
-  // Convert to ResultItems
-  const items = referencesToItems(limitedRefs, lineTexts);
+    const lineIndex = ref.line - 1;
+    const lineContent =
+      lineIndex >= 0 && lineIndex < lines.length ? lines[lineIndex] : "";
 
-  // Update panel title dynamically
-  const count = references.length;
-  const limitNote = count > MAX_RESULTS ? ` (first ${MAX_RESULTS})` : "";
-  (panel as { options: { title: string } }).options.title =
-    `References to '${symbol}': ${count}${limitNote}`;
-
-  // Update provider with new items (triggers panel refresh if open)
-  provider.updateItems(items);
-
-  // Show panel if not already open
-  if (!panel.isOpen) {
-    await panel.show();
+    result.push({ ...ref, content: lineContent });
   }
+
+  return result;
 }
 
 // Handle lsp_references hook
-globalThis.on_lsp_references = function (data: {
+globalThis.on_lsp_references = async function (data: {
   symbol: string;
   locations: ReferenceLocation[];
-}): void {
-  editor.debug(`Received ${data.locations.length} references for '${data.symbol}'`);
+}): Promise<void> {
+  editor.debug(
+    `Received ${data.locations.length} references for '${data.symbol}'`
+  );
 
   if (data.locations.length === 0) {
     editor.setStatus(`No references found for '${data.symbol}'`);
     return;
   }
 
-  showReferences(data.symbol, data.locations);
+  // Load line content for descriptions
+  pendingRefs = await loadLineContent(data.locations);
+
+  // Use prompt mode with filter source - same UX as grep plugins
+  finder.prompt({
+    title: `References to '${data.symbol}' (${data.locations.length})`,
+    source: {
+      mode: "filter",
+      load: async () => pendingRefs,
+    },
+  });
 };
 
 // Register the hook handler
 editor.on("lsp_references", "on_lsp_references");
 
-// Export close function for command palette
-globalThis.hide_references_panel = function (): void {
-  panel.close();
+// Close function for command palette
+globalThis.close_references = function (): void {
+  finder.close();
 };
 
-// Register commands
-editor.registerCommand(
-  "%cmd.show_references",
-  "%cmd.show_references_desc",
-  "show_references_panel",
-  "normal"
-);
-
-editor.registerCommand(
-  "%cmd.hide_references",
-  "%cmd.hide_references_desc",
-  "hide_references_panel",
-  "normal"
-);
-
-// Plugin initialization
-editor.setStatus("Find References plugin ready");
-editor.debug("Find References plugin initialized (Provider pattern v2)");
+editor.debug("Find References plugin loaded (using Finder abstraction)");

@@ -23,29 +23,37 @@ fn use_macos_symbols() -> bool {
 }
 
 /// Format a keybinding as a user-friendly string
-/// On macOS, uses native symbols for Alt (⌥) and Shift (⇧)
+/// On macOS, uses native symbols: ⌃ (Control), ⌥ (Option), ⇧ (Shift) without separators
+/// On other platforms, uses "Ctrl+Alt+Shift+" format
 pub fn format_keybinding(keycode: &KeyCode, modifiers: &KeyModifiers) -> String {
     let mut result = String::new();
 
-    // Control key is Ctrl on all platforms (crossterm's CONTROL modifier is the physical Ctrl key)
-    // On macOS, use native symbols for Alt and Shift only
+    // On macOS, use native symbols: ⌃ (Control), ⌥ (Option/Alt), ⇧ (Shift)
     let (ctrl_label, alt_label, shift_label) = if use_macos_symbols() {
-        ("Ctrl", "⌥", "⇧")
+        ("⌃", "⌥", "⇧")
     } else {
         ("Ctrl", "Alt", "Shift")
     };
 
+    let use_plus = !use_macos_symbols();
+
     if modifiers.contains(KeyModifiers::CONTROL) {
         result.push_str(ctrl_label);
-        result.push('+');
+        if use_plus {
+            result.push('+');
+        }
     }
     if modifiers.contains(KeyModifiers::ALT) {
         result.push_str(alt_label);
-        result.push('+');
+        if use_plus {
+            result.push('+');
+        }
     }
     if modifiers.contains(KeyModifiers::SHIFT) {
         result.push_str(shift_label);
-        result.push('+');
+        if use_plus {
+            result.push('+');
+        }
     }
 
     match keycode {
@@ -54,10 +62,10 @@ pub fn format_keybinding(keycode: &KeyCode, modifiers: &KeyModifiers) -> String 
         KeyCode::Delete => result.push_str("Del"),
         KeyCode::Tab => result.push_str("Tab"),
         KeyCode::Esc => result.push_str("Esc"),
-        KeyCode::Left => result.push_str("←"),
-        KeyCode::Right => result.push_str("→"),
-        KeyCode::Up => result.push_str("↑"),
-        KeyCode::Down => result.push_str("↓"),
+        KeyCode::Left => result.push('←'),
+        KeyCode::Right => result.push('→'),
+        KeyCode::Up => result.push('↑'),
+        KeyCode::Down => result.push('↓'),
         KeyCode::Home => result.push_str("Home"),
         KeyCode::End => result.push_str("End"),
         KeyCode::PageUp => result.push_str("PgUp"),
@@ -383,6 +391,8 @@ pub enum Action {
 
     // Prompt mode actions
     PromptConfirm,
+    /// PromptConfirm with recorded text for macro playback
+    PromptConfirmWithText(String),
     PromptCancel,
     PromptBackspace,
     PromptDelete,
@@ -927,7 +937,7 @@ impl KeybindingResolver {
                     if sequence.len() == binding.keys.len() && !sequence.is_empty() {
                         self.default_chord_bindings
                             .entry(context)
-                            .or_insert_with(HashMap::new)
+                            .or_default()
                             .insert(sequence, action);
                     }
                 } else if let Some(key_code) = Self::parse_key(&binding.key) {
@@ -957,10 +967,7 @@ impl KeybindingResolver {
         action: Action,
         key_name: &str,
     ) {
-        let context_bindings = self
-            .default_bindings
-            .entry(context)
-            .or_insert_with(HashMap::new);
+        let context_bindings = self.default_bindings.entry(context).or_default();
 
         // Insert the primary binding
         context_bindings.insert((key_code, modifiers), action.clone());
@@ -1022,7 +1029,7 @@ impl KeybindingResolver {
                     if sequence.len() == binding.keys.len() && !sequence.is_empty() {
                         self.chord_bindings
                             .entry(context)
-                            .or_insert_with(HashMap::new)
+                            .or_default()
                             .insert(sequence, action);
                     }
                 } else if let Some(key_code) = Self::parse_key(&binding.key) {
@@ -1030,7 +1037,7 @@ impl KeybindingResolver {
                     let modifiers = Self::parse_modifiers(&binding.modifiers);
                     self.bindings
                         .entry(context)
-                        .or_insert_with(HashMap::new)
+                        .or_default()
                         .insert((key_code, modifiers), action);
                 }
             }
@@ -1232,12 +1239,12 @@ impl KeybindingResolver {
         }
 
         // Handle regular character input in text input contexts
-        if context.allows_text_input() {
-            if event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT {
-                if let KeyCode::Char(c) = event.code {
-                    tracing::trace!("  -> Character input: '{}'", c);
-                    return Action::InsertChar(c);
-                }
+        if context.allows_text_input()
+            && (event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT)
+        {
+            if let KeyCode::Char(c) = event.code {
+                tracing::trace!("  -> Character input: '{}'", c);
+                return Action::InsertChar(c);
             }
         }
 
@@ -1346,7 +1353,7 @@ impl KeybindingResolver {
                 });
 
                 let (key_code, modifiers) = matches[0];
-                return Some(Self::format_keybinding(key_code, modifiers));
+                return Some(format_keybinding(&key_code, &modifiers));
             }
         }
 
@@ -1403,45 +1410,6 @@ impl KeybindingResolver {
         None
     }
 
-    /// Format a keybinding for display (e.g., "Ctrl+S", "Alt+Enter", "F12")
-    fn format_keybinding(key_code: KeyCode, modifiers: KeyModifiers) -> String {
-        let mut parts = Vec::new();
-
-        if modifiers.contains(KeyModifiers::CONTROL) {
-            parts.push("Ctrl");
-        }
-        if modifiers.contains(KeyModifiers::ALT) {
-            parts.push("Alt");
-        }
-        if modifiers.contains(KeyModifiers::SHIFT) {
-            parts.push("Shift");
-        }
-
-        // Format the key
-        let key_str = match key_code {
-            KeyCode::Char(c) if c == ' ' => "Space".to_string(),
-            KeyCode::Char(c) => c.to_uppercase().to_string(),
-            KeyCode::Enter => "Enter".to_string(),
-            KeyCode::Backspace => "Backspace".to_string(),
-            KeyCode::Delete => "Delete".to_string(),
-            KeyCode::Tab => "Tab".to_string(),
-            KeyCode::Esc => "Esc".to_string(),
-            KeyCode::Left => "Left".to_string(),
-            KeyCode::Right => "Right".to_string(),
-            KeyCode::Up => "Up".to_string(),
-            KeyCode::Down => "Down".to_string(),
-            KeyCode::Home => "Home".to_string(),
-            KeyCode::End => "End".to_string(),
-            KeyCode::PageUp => "PageUp".to_string(),
-            KeyCode::PageDown => "PageDown".to_string(),
-            KeyCode::F(n) => format!("F{}", n),
-            _ => return String::new(),
-        };
-
-        parts.push(&key_str);
-        parts.join("+")
-    }
-
     /// Parse a key string to KeyCode
     fn parse_key(key: &str) -> Option<KeyCode> {
         let lower = key.to_lowercase();
@@ -1485,7 +1453,6 @@ impl KeybindingResolver {
     }
 
     /// Create default keybindings organized by context
-
     /// Get all keybindings (for help display)
     /// Returns a Vec of (key_description, action_description)
     pub fn get_all_bindings(&self) -> Vec<(String, String)> {
@@ -1665,6 +1632,9 @@ impl KeybindingResolver {
             Action::DecreaseSplitSize => t!("action.decrease_split_size"),
             Action::ToggleMaximizeSplit => t!("action.toggle_maximize_split"),
             Action::PromptConfirm => t!("action.prompt_confirm"),
+            Action::PromptConfirmWithText(ref text) => {
+                format!("{} ({})", t!("action.prompt_confirm"), text).into()
+            }
             Action::PromptCancel => t!("action.prompt_cancel"),
             Action::PromptBackspace => t!("action.prompt_backspace"),
             Action::PromptDelete => t!("action.prompt_delete"),
@@ -1888,7 +1858,7 @@ impl KeybindingResolver {
 
                     self.bindings
                         .entry(context)
-                        .or_insert_with(HashMap::new)
+                        .or_default()
                         .insert((key_code, modifiers), action);
                 }
             }

@@ -11,7 +11,15 @@
  */
 
 // Types
-export type { RGB, Location, PanelOptions, PanelState, NavigationOptions, HighlightPattern } from "./types.ts";
+export type {
+  RGB,
+  Location,
+  PanelOptions,
+  PanelState,
+  NavigationOptions,
+  HighlightPattern,
+  FileExplorerDecoration,
+} from "./types.ts";
 
 // Panel Management
 export { PanelManager } from "./panel-manager.ts";
@@ -22,3 +30,17 @@ export { NavigationController } from "./navigation-controller.ts";
 // Buffer Creation
 export { createVirtualBufferFactory } from "./virtual-buffer-factory.ts";
 export type { VirtualBufferOptions, SplitBufferOptions } from "./virtual-buffer-factory.ts";
+
+// Finder Abstraction
+export { Finder, defaultFuzzyFilter, parseGrepLine, parseGrepOutput, getRelativePath, createLiveProvider } from "./finder.ts";
+export type {
+  DisplayEntry,
+  SearchSource,
+  FilterSource,
+  PreviewConfig,
+  FinderConfig,
+  PromptOptions,
+  PanelOptions as FinderPanelOptions,
+  FinderProvider,
+  LivePanelOptions,
+} from "./finder.ts";

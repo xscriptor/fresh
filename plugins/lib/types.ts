@@ -12,6 +12,20 @@
 export type RGB = [number, number, number];
 
 /**
+ * File explorer decoration metadata provided by plugins
+ */
+export interface FileExplorerDecoration {
+  /** Absolute or workspace-relative path to decorate */
+  path: string;
+  /** Symbol to display (single character recommended) */
+  symbol?: string;
+  /** RGB color for the symbol */
+  color?: RGB;
+  /** Priority for resolving conflicts (higher wins) */
+  priority?: number;
+}
+
+/**
  * File location with line and column
  */
 export interface Location {

@@ -3,12 +3,13 @@
 //! Converts schema information into renderable setting items.
 
 use super::schema::{SettingCategory, SettingSchema, SettingType};
+use crate::config_io::ConfigLayer;
 use crate::view::controls::{
     DropdownState, FocusState, KeybindingListState, MapState, NumberInputState, TextInputState,
     TextListState, ToggleState,
 };
 use crate::view::ui::{FocusRegion, ScrollItem, TextEdit};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// State for multiline JSON editing
 #[derive(Debug, Clone)]
@@ -227,8 +228,17 @@ pub struct SettingItem {
     pub control: SettingControl,
     /// Default value (for reset)
     pub default: Option<serde_json::Value>,
-    /// Whether this setting has been modified from default
+    /// Whether this setting is defined in the current target layer.
+    /// This is the new semantic: modified means "explicitly set in target layer",
+    /// not "differs from schema default".
     pub modified: bool,
+    /// Which layer this setting's current value comes from.
+    /// System means it's using the schema default.
+    pub layer_source: ConfigLayer,
+    /// Whether this field is read-only (cannot be edited)
+    pub read_only: bool,
+    /// Whether this is an auto-managed map (no_add) that should never show as modified
+    pub is_auto_managed: bool,
 }
 
 /// The type of control to render for a setting
@@ -328,7 +338,7 @@ impl SettingItem {
             if chars_per_line == 0 {
                 return 1;
             }
-            ((desc.len() + chars_per_line - 1) / chars_per_line) as u16
+            desc.len().div_ceil(chars_per_line) as u16
         } else {
             0
         }
@@ -516,29 +526,43 @@ pub struct SettingsPage {
     pub subpages: Vec<SettingsPage>,
 }
 
+/// Context for building setting items with layer awareness
+pub struct BuildContext<'a> {
+    /// The merged config value (effective values)
+    pub config_value: &'a serde_json::Value,
+    /// Map of paths to their source layer
+    pub layer_sources: &'a HashMap<String, ConfigLayer>,
+    /// The layer currently being edited
+    pub target_layer: ConfigLayer,
+}
+
 /// Convert a category tree into pages with control states
 pub fn build_pages(
     categories: &[SettingCategory],
     config_value: &serde_json::Value,
+    layer_sources: &HashMap<String, ConfigLayer>,
+    target_layer: ConfigLayer,
 ) -> Vec<SettingsPage> {
-    categories
-        .iter()
-        .map(|cat| build_page(cat, config_value))
-        .collect()
+    let ctx = BuildContext {
+        config_value,
+        layer_sources,
+        target_layer,
+    };
+    categories.iter().map(|cat| build_page(cat, &ctx)).collect()
 }
 
 /// Build a single page from a category
-fn build_page(category: &SettingCategory, config_value: &serde_json::Value) -> SettingsPage {
+fn build_page(category: &SettingCategory, ctx: &BuildContext) -> SettingsPage {
     let items = category
         .settings
         .iter()
-        .map(|s| build_item(s, config_value))
+        .map(|s| build_item(s, ctx))
         .collect();
 
     let subpages = category
         .subcategories
         .iter()
-        .map(|sub| build_page(sub, config_value))
+        .map(|sub| build_page(sub, ctx))
         .collect();
 
     SettingsPage {
@@ -551,9 +575,12 @@ fn build_page(category: &SettingCategory, config_value: &serde_json::Value) -> S
 }
 
 /// Build a setting item with its control state initialized from current config
-pub fn build_item(schema: &SettingSchema, config_value: &serde_json::Value) -> SettingItem {
+pub fn build_item(schema: &SettingSchema, ctx: &BuildContext) -> SettingItem {
     // Get current value from config
-    let current_value = config_value.pointer(&schema.path);
+    let current_value = ctx.config_value.pointer(&schema.path);
+
+    // Check if this is an auto-managed map (no_add)
+    let is_auto_managed = matches!(&schema.setting_type, SettingType::Map { no_add: true, .. });
 
     // Create control based on type
     let control = match &schema.setting_type {
@@ -666,6 +693,7 @@ pub fn build_item(schema: &SettingSchema, config_value: &serde_json::Value) -> S
         SettingType::Map {
             value_schema,
             display_field,
+            no_add,
         } => {
             // Get current map value or default
             let map_value = current_value
@@ -677,6 +705,9 @@ pub fn build_item(schema: &SettingSchema, config_value: &serde_json::Value) -> S
             state = state.with_value_schema((**value_schema).clone());
             if let Some(field) = display_field {
                 state = state.with_display_field(field.clone());
+            }
+            if *no_add {
+                state = state.with_no_add(true);
             }
             SettingControl::Map(state)
         }
@@ -702,11 +733,19 @@ pub fn build_item(schema: &SettingSchema, config_value: &serde_json::Value) -> S
         SettingType::Complex => json_control(&schema.name, current_value, schema.default.as_ref()),
     };
 
-    // Check if modified from default
-    let modified = match (&current_value, &schema.default) {
-        (Some(current), Some(default)) => *current != default,
-        (Some(_), None) => true,
-        _ => false,
+    // Determine layer source for this setting
+    let layer_source = ctx
+        .layer_sources
+        .get(&schema.path)
+        .copied()
+        .unwrap_or(ConfigLayer::System);
+
+    // NEW SEMANTICS: "modified" means the value is defined in the target layer being edited.
+    // Auto-managed maps (no_add like plugins/languages) are never "modified" at the container level.
+    let modified = if is_auto_managed {
+        false // Auto-managed content never shows as modified
+    } else {
+        layer_source == ctx.target_layer
     };
 
     // Clean description to remove redundancy with name
@@ -719,6 +758,9 @@ pub fn build_item(schema: &SettingSchema, config_value: &serde_json::Value) -> S
         control,
         default: schema.default.clone(),
         modified,
+        layer_source,
+        read_only: schema.read_only,
+        is_auto_managed,
     }
 }
 
@@ -836,6 +878,7 @@ pub fn build_item_from_value(
         SettingType::Map {
             value_schema,
             display_field,
+            no_add,
         } => {
             let map_value = current_value
                 .cloned()
@@ -846,6 +889,9 @@ pub fn build_item_from_value(
             state = state.with_value_schema((**value_schema).clone());
             if let Some(field) = display_field {
                 state = state.with_display_field(field.clone());
+            }
+            if *no_add {
+                state = state.with_no_add(true);
             }
             SettingControl::Map(state)
         }
@@ -870,12 +916,16 @@ pub fn build_item_from_value(
         SettingType::Complex => json_control(&schema.name, current_value, schema.default.as_ref()),
     };
 
-    // Check if modified from default
+    // For dialog items, we use the traditional definition of "modified":
+    // differs from schema default (since we don't have layer context in dialogs)
     let modified = match (&current_value, &schema.default) {
         (Some(current), Some(default)) => *current != default,
         (Some(_), None) => true,
         _ => false,
     };
+
+    // Check if this is an auto-managed map (no_add)
+    let is_auto_managed = matches!(&schema.setting_type, SettingType::Map { no_add: true, .. });
 
     SettingItem {
         path: schema.path.clone(),
@@ -884,6 +934,10 @@ pub fn build_item_from_value(
         control,
         default: schema.default.clone(),
         modified,
+        // For dialogs, we don't track layer source - default to System
+        layer_source: ConfigLayer::System,
+        read_only: schema.read_only,
+        is_auto_managed,
     }
 }
 
@@ -955,6 +1009,31 @@ mod tests {
         })
     }
 
+    /// Helper to create a BuildContext for testing
+    fn test_context(config: &serde_json::Value) -> BuildContext<'_> {
+        // Create static empty HashMap for layer_sources
+        static EMPTY_SOURCES: std::sync::LazyLock<HashMap<String, ConfigLayer>> =
+            std::sync::LazyLock::new(HashMap::new);
+        BuildContext {
+            config_value: config,
+            layer_sources: &EMPTY_SOURCES,
+            target_layer: ConfigLayer::User,
+        }
+    }
+
+    /// Helper to create a BuildContext with layer sources for testing "modified" behavior
+    fn test_context_with_sources<'a>(
+        config: &'a serde_json::Value,
+        layer_sources: &'a HashMap<String, ConfigLayer>,
+        target_layer: ConfigLayer,
+    ) -> BuildContext<'a> {
+        BuildContext {
+            config_value: config,
+            layer_sources,
+            target_layer,
+        }
+    }
+
     #[test]
     fn test_build_toggle_item() {
         let schema = SettingSchema {
@@ -963,19 +1042,47 @@ mod tests {
             description: Some("Check for updates".to_string()),
             setting_type: SettingType::Boolean,
             default: Some(serde_json::Value::Bool(true)),
+            read_only: false,
         };
 
         let config = sample_config();
-        let item = build_item(&schema, &config);
+        let ctx = test_context(&config);
+        let item = build_item(&schema, &ctx);
 
         assert_eq!(item.path, "/check_for_updates");
-        assert!(item.modified); // false != true (default)
+        // With new semantics, modified = false when layer_sources is empty
+        // (value is not defined in target layer)
+        assert!(!item.modified);
+        assert_eq!(item.layer_source, ConfigLayer::System);
 
         if let SettingControl::Toggle(state) = &item.control {
             assert!(!state.checked); // Current value is false
         } else {
             panic!("Expected toggle control");
         }
+    }
+
+    #[test]
+    fn test_build_toggle_item_modified_in_user_layer() {
+        let schema = SettingSchema {
+            path: "/check_for_updates".to_string(),
+            name: "Check For Updates".to_string(),
+            description: Some("Check for updates".to_string()),
+            setting_type: SettingType::Boolean,
+            default: Some(serde_json::Value::Bool(true)),
+            read_only: false,
+        };
+
+        let config = sample_config();
+        let mut layer_sources = HashMap::new();
+        layer_sources.insert("/check_for_updates".to_string(), ConfigLayer::User);
+        let ctx = test_context_with_sources(&config, &layer_sources, ConfigLayer::User);
+        let item = build_item(&schema, &ctx);
+
+        // With new semantics: modified = true because value is defined in User layer
+        // and target_layer is User
+        assert!(item.modified);
+        assert_eq!(item.layer_source, ConfigLayer::User);
     }
 
     #[test]
@@ -989,12 +1096,15 @@ mod tests {
                 maximum: Some(16),
             },
             default: Some(serde_json::Value::Number(4.into())),
+            read_only: false,
         };
 
         let config = sample_config();
-        let item = build_item(&schema, &config);
+        let ctx = test_context(&config);
+        let item = build_item(&schema, &ctx);
 
-        assert!(item.modified); // 2 != 4 (default)
+        // With new semantics, modified = false when layer_sources is empty
+        assert!(!item.modified);
 
         if let SettingControl::Number(state) = &item.control {
             assert_eq!(state.value, 2);
@@ -1013,12 +1123,15 @@ mod tests {
             description: None,
             setting_type: SettingType::String,
             default: Some(serde_json::Value::String("high-contrast".to_string())),
+            read_only: false,
         };
 
         let config = sample_config();
-        let item = build_item(&schema, &config);
+        let ctx = test_context(&config);
+        let item = build_item(&schema, &ctx);
 
-        assert!(item.modified);
+        // With new semantics, modified = false when layer_sources is empty
+        assert!(!item.modified);
 
         if let SettingControl::Text(state) = &item.control {
             assert_eq!(state.value, "monokai");

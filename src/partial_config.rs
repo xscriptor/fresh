@@ -6,7 +6,7 @@
 use crate::config::{
     CursorStyle, FileBrowserConfig, FileExplorerConfig, FormatterConfig, HighlighterPreference,
     Keybinding, KeybindingMapName, KeymapConfig, LanguageConfig, LineEndingOption, OnSaveAction,
-    TerminalConfig, ThemeName, WarningsConfig,
+    PluginConfig, TerminalConfig, ThemeName, WarningsConfig,
 };
 use crate::types::LspServerConfig;
 use serde::{Deserialize, Serialize};
@@ -87,6 +87,7 @@ pub struct PartialConfig {
     pub languages: Option<HashMap<String, PartialLanguageConfig>>,
     pub lsp: Option<HashMap<String, LspServerConfig>>,
     pub warnings: Option<PartialWarningsConfig>,
+    pub plugins: Option<HashMap<String, PartialPluginConfig>>,
 }
 
 impl Merge for PartialConfig {
@@ -110,6 +111,7 @@ impl Merge for PartialConfig {
         merge_hashmap(&mut self.keybinding_maps, &other.keybinding_maps);
         merge_hashmap_recursive(&mut self.languages, &other.languages);
         merge_hashmap_recursive(&mut self.lsp, &other.lsp);
+        merge_hashmap_recursive(&mut self.plugins, &other.plugins);
 
         self.active_keybinding_map
             .merge_from(&other.active_keybinding_map);
@@ -141,6 +143,7 @@ pub struct PartialEditorConfig {
     pub large_file_threshold_bytes: Option<u64>,
     pub estimated_line_length: Option<usize>,
     pub enable_inlay_hints: Option<bool>,
+    pub enable_semantic_tokens_full: Option<bool>,
     pub recovery_enabled: Option<bool>,
     pub auto_save_interval_secs: Option<u32>,
     pub highlight_context_bytes: Option<usize>,
@@ -151,6 +154,10 @@ pub struct PartialEditorConfig {
     pub file_tree_poll_interval_ms: Option<u64>,
     pub default_line_ending: Option<LineEndingOption>,
     pub cursor_style: Option<CursorStyle>,
+    pub keyboard_disambiguate_escape_codes: Option<bool>,
+    pub keyboard_report_event_types: Option<bool>,
+    pub keyboard_report_alternate_keys: Option<bool>,
+    pub keyboard_report_all_keys_as_escape_codes: Option<bool>,
     pub quick_suggestions: Option<bool>,
     pub show_menu_bar: Option<bool>,
     pub show_tab_bar: Option<bool>,
@@ -176,6 +183,8 @@ impl Merge for PartialEditorConfig {
             .merge_from(&other.estimated_line_length);
         self.enable_inlay_hints
             .merge_from(&other.enable_inlay_hints);
+        self.enable_semantic_tokens_full
+            .merge_from(&other.enable_semantic_tokens_full);
         self.recovery_enabled.merge_from(&other.recovery_enabled);
         self.auto_save_interval_secs
             .merge_from(&other.auto_save_interval_secs);
@@ -194,6 +203,14 @@ impl Merge for PartialEditorConfig {
         self.default_line_ending
             .merge_from(&other.default_line_ending);
         self.cursor_style.merge_from(&other.cursor_style);
+        self.keyboard_disambiguate_escape_codes
+            .merge_from(&other.keyboard_disambiguate_escape_codes);
+        self.keyboard_report_event_types
+            .merge_from(&other.keyboard_report_event_types);
+        self.keyboard_report_alternate_keys
+            .merge_from(&other.keyboard_report_alternate_keys);
+        self.keyboard_report_all_keys_as_escape_codes
+            .merge_from(&other.keyboard_report_all_keys_as_escape_codes);
         self.quick_suggestions.merge_from(&other.quick_suggestions);
         self.show_menu_bar.merge_from(&other.show_menu_bar);
         self.show_tab_bar.merge_from(&other.show_tab_bar);
@@ -260,6 +277,23 @@ impl Merge for PartialWarningsConfig {
     fn merge_from(&mut self, other: &Self) {
         self.show_status_indicator
             .merge_from(&other.show_status_indicator);
+    }
+}
+
+/// Partial plugin configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PartialPluginConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<std::path::PathBuf>,
+}
+
+impl Merge for PartialPluginConfig {
+    fn merge_from(&mut self, other: &Self) {
+        self.enabled.merge_from(&other.enabled);
+        self.path.merge_from(&other.path);
     }
 }
 
@@ -337,6 +371,7 @@ impl From<&crate::config::EditorConfig> for PartialEditorConfig {
             large_file_threshold_bytes: Some(cfg.large_file_threshold_bytes),
             estimated_line_length: Some(cfg.estimated_line_length),
             enable_inlay_hints: Some(cfg.enable_inlay_hints),
+            enable_semantic_tokens_full: Some(cfg.enable_semantic_tokens_full),
             recovery_enabled: Some(cfg.recovery_enabled),
             auto_save_interval_secs: Some(cfg.auto_save_interval_secs),
             highlight_context_bytes: Some(cfg.highlight_context_bytes),
@@ -347,6 +382,12 @@ impl From<&crate::config::EditorConfig> for PartialEditorConfig {
             file_tree_poll_interval_ms: Some(cfg.file_tree_poll_interval_ms),
             default_line_ending: Some(cfg.default_line_ending.clone()),
             cursor_style: Some(cfg.cursor_style),
+            keyboard_disambiguate_escape_codes: Some(cfg.keyboard_disambiguate_escape_codes),
+            keyboard_report_event_types: Some(cfg.keyboard_report_event_types),
+            keyboard_report_alternate_keys: Some(cfg.keyboard_report_alternate_keys),
+            keyboard_report_all_keys_as_escape_codes: Some(
+                cfg.keyboard_report_all_keys_as_escape_codes,
+            ),
             quick_suggestions: Some(cfg.quick_suggestions),
             show_menu_bar: Some(cfg.show_menu_bar),
             show_tab_bar: Some(cfg.show_tab_bar),
@@ -382,6 +423,9 @@ impl PartialEditorConfig {
             enable_inlay_hints: self
                 .enable_inlay_hints
                 .unwrap_or(defaults.enable_inlay_hints),
+            enable_semantic_tokens_full: self
+                .enable_semantic_tokens_full
+                .unwrap_or(defaults.enable_semantic_tokens_full),
             recovery_enabled: self.recovery_enabled.unwrap_or(defaults.recovery_enabled),
             auto_save_interval_secs: self
                 .auto_save_interval_secs
@@ -408,6 +452,18 @@ impl PartialEditorConfig {
                 .default_line_ending
                 .unwrap_or(defaults.default_line_ending.clone()),
             cursor_style: self.cursor_style.unwrap_or(defaults.cursor_style),
+            keyboard_disambiguate_escape_codes: self
+                .keyboard_disambiguate_escape_codes
+                .unwrap_or(defaults.keyboard_disambiguate_escape_codes),
+            keyboard_report_event_types: self
+                .keyboard_report_event_types
+                .unwrap_or(defaults.keyboard_report_event_types),
+            keyboard_report_alternate_keys: self
+                .keyboard_report_alternate_keys
+                .unwrap_or(defaults.keyboard_report_alternate_keys),
+            keyboard_report_all_keys_as_escape_codes: self
+                .keyboard_report_all_keys_as_escape_codes
+                .unwrap_or(defaults.keyboard_report_all_keys_as_escape_codes),
             quick_suggestions: self.quick_suggestions.unwrap_or(defaults.quick_suggestions),
             show_menu_bar: self.show_menu_bar.unwrap_or(defaults.show_menu_bar),
             show_tab_bar: self.show_tab_bar.unwrap_or(defaults.show_tab_bar),
@@ -493,6 +549,24 @@ impl PartialWarningsConfig {
     }
 }
 
+impl From<&PluginConfig> for PartialPluginConfig {
+    fn from(cfg: &PluginConfig) -> Self {
+        Self {
+            enabled: Some(cfg.enabled),
+            path: cfg.path.clone(),
+        }
+    }
+}
+
+impl PartialPluginConfig {
+    pub fn resolve(self, defaults: &PluginConfig) -> PluginConfig {
+        PluginConfig {
+            enabled: self.enabled.unwrap_or(defaults.enabled),
+            path: self.path.or_else(|| defaults.path.clone()),
+        }
+    }
+}
+
 impl From<&LanguageConfig> for PartialLanguageConfig {
     fn from(cfg: &LanguageConfig) -> Self {
         Self {
@@ -563,6 +637,30 @@ impl From<&crate::config::Config> for PartialConfig {
             ),
             lsp: Some(cfg.lsp.clone()),
             warnings: Some(PartialWarningsConfig::from(&cfg.warnings)),
+            // Only include plugins that differ from defaults
+            // Path is auto-discovered at runtime and should never be saved
+            plugins: {
+                let default_plugin = crate::config::PluginConfig::default();
+                let non_default_plugins: HashMap<String, PartialPluginConfig> = cfg
+                    .plugins
+                    .iter()
+                    .filter(|(_, v)| v.enabled != default_plugin.enabled)
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            PartialPluginConfig {
+                                enabled: Some(v.enabled),
+                                path: None, // Don't save path - it's auto-discovered
+                            },
+                        )
+                    })
+                    .collect();
+                if non_default_plugins.is_empty() {
+                    None
+                } else {
+                    Some(non_default_plugins)
+                }
+            },
         }
     }
 }
@@ -615,6 +713,18 @@ impl PartialConfig {
             result
         };
 
+        // Resolve plugins HashMap - merge with defaults
+        let plugins = {
+            let mut result = defaults.plugins.clone();
+            if let Some(partial_plugins) = self.plugins {
+                for (key, partial_plugin) in partial_plugins {
+                    let default_plugin = result.get(&key).cloned().unwrap_or_default();
+                    result.insert(key, partial_plugin.resolve(&default_plugin));
+                }
+            }
+            result
+        };
+
         crate::config::Config {
             version: self.version.unwrap_or(defaults.version),
             theme: self.theme.unwrap_or_else(|| defaults.theme.clone()),
@@ -651,6 +761,7 @@ impl PartialConfig {
                 .warnings
                 .map(|e| e.resolve(&defaults.warnings))
                 .unwrap_or_else(|| defaults.warnings.clone()),
+            plugins,
         }
     }
 }
@@ -965,5 +1076,210 @@ mod tests {
         let partial = session.to_partial_config();
         assert_eq!(partial.theme, Some(ThemeName::from("dark")));
         assert_eq!(partial.editor.as_ref().unwrap().tab_size, Some(2));
+    }
+
+    // ============= Plugin Config Delta Saving Tests =============
+
+    #[test]
+    fn plugins_with_default_enabled_not_serialized() {
+        // When all plugins have enabled=true (the default), plugins should be None
+        let mut config = crate::config::Config::default();
+        config.plugins.insert(
+            "test_plugin".to_string(),
+            PluginConfig {
+                enabled: true, // Default value
+                path: Some(std::path::PathBuf::from("/path/to/plugin.ts")),
+            },
+        );
+
+        let partial = PartialConfig::from(&config);
+
+        // plugins should be None since all have default values
+        assert!(
+            partial.plugins.is_none(),
+            "Plugins with default enabled=true should not be serialized"
+        );
+    }
+
+    #[test]
+    fn plugins_with_disabled_are_serialized() {
+        // When a plugin is disabled, it should be included in the partial config
+        let mut config = crate::config::Config::default();
+        config.plugins.insert(
+            "enabled_plugin".to_string(),
+            PluginConfig {
+                enabled: true,
+                path: Some(std::path::PathBuf::from("/path/to/enabled.ts")),
+            },
+        );
+        config.plugins.insert(
+            "disabled_plugin".to_string(),
+            PluginConfig {
+                enabled: false, // Not default!
+                path: Some(std::path::PathBuf::from("/path/to/disabled.ts")),
+            },
+        );
+
+        let partial = PartialConfig::from(&config);
+
+        // plugins should contain only the disabled plugin
+        assert!(partial.plugins.is_some());
+        let plugins = partial.plugins.unwrap();
+        assert_eq!(
+            plugins.len(),
+            1,
+            "Only disabled plugins should be serialized"
+        );
+        assert!(plugins.contains_key("disabled_plugin"));
+        assert!(!plugins.contains_key("enabled_plugin"));
+
+        // Check the disabled plugin has correct values
+        let disabled = plugins.get("disabled_plugin").unwrap();
+        assert_eq!(disabled.enabled, Some(false));
+        // Path should be None - it's auto-discovered and shouldn't be saved
+        assert!(disabled.path.is_none(), "Path should not be serialized");
+    }
+
+    #[test]
+    fn plugin_path_never_serialized() {
+        // Even for disabled plugins, path should never be serialized
+        let mut config = crate::config::Config::default();
+        config.plugins.insert(
+            "my_plugin".to_string(),
+            PluginConfig {
+                enabled: false,
+                path: Some(std::path::PathBuf::from("/some/path/plugin.ts")),
+            },
+        );
+
+        let partial = PartialConfig::from(&config);
+        let plugins = partial.plugins.unwrap();
+        let plugin = plugins.get("my_plugin").unwrap();
+
+        assert!(
+            plugin.path.is_none(),
+            "Path is runtime-discovered and should never be serialized"
+        );
+    }
+
+    #[test]
+    fn resolving_partial_with_disabled_plugin_preserves_state() {
+        // Loading a config with a disabled plugin should preserve disabled state
+        let partial = PartialConfig {
+            plugins: Some(HashMap::from([(
+                "my_plugin".to_string(),
+                PartialPluginConfig {
+                    enabled: Some(false),
+                    path: None,
+                },
+            )])),
+            ..Default::default()
+        };
+
+        let resolved = partial.resolve();
+
+        // Plugin should exist and be disabled
+        let plugin = resolved.plugins.get("my_plugin");
+        assert!(
+            plugin.is_some(),
+            "Disabled plugin should be in resolved config"
+        );
+        assert!(
+            !plugin.unwrap().enabled,
+            "Plugin should remain disabled after resolve"
+        );
+    }
+
+    #[test]
+    fn merge_plugins_preserves_higher_precedence_disabled_state() {
+        // When merging, higher precedence disabled state should win
+        let mut higher = PartialConfig {
+            plugins: Some(HashMap::from([(
+                "my_plugin".to_string(),
+                PartialPluginConfig {
+                    enabled: Some(false), // User disabled
+                    path: None,
+                },
+            )])),
+            ..Default::default()
+        };
+
+        let lower = PartialConfig {
+            plugins: Some(HashMap::from([(
+                "my_plugin".to_string(),
+                PartialPluginConfig {
+                    enabled: Some(true), // Lower layer has it enabled
+                    path: None,
+                },
+            )])),
+            ..Default::default()
+        };
+
+        higher.merge_from(&lower);
+
+        let plugins = higher.plugins.unwrap();
+        let plugin = plugins.get("my_plugin").unwrap();
+        assert_eq!(
+            plugin.enabled,
+            Some(false),
+            "Higher precedence disabled state should win"
+        );
+    }
+
+    #[test]
+    fn roundtrip_disabled_plugin_only_saves_delta() {
+        // Roundtrip test: create config with mix of enabled/disabled plugins,
+        // convert to partial, serialize to JSON, deserialize, and verify
+        let mut config = crate::config::Config::default();
+        config.plugins.insert(
+            "plugin_a".to_string(),
+            PluginConfig {
+                enabled: true,
+                path: Some(std::path::PathBuf::from("/a.ts")),
+            },
+        );
+        config.plugins.insert(
+            "plugin_b".to_string(),
+            PluginConfig {
+                enabled: false,
+                path: Some(std::path::PathBuf::from("/b.ts")),
+            },
+        );
+        config.plugins.insert(
+            "plugin_c".to_string(),
+            PluginConfig {
+                enabled: true,
+                path: Some(std::path::PathBuf::from("/c.ts")),
+            },
+        );
+
+        // Convert to partial (delta)
+        let partial = PartialConfig::from(&config);
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&partial).unwrap();
+
+        // Verify only plugin_b is in the JSON
+        assert!(
+            json.contains("plugin_b"),
+            "Disabled plugin should be in serialized JSON"
+        );
+        assert!(
+            !json.contains("plugin_a"),
+            "Enabled plugin_a should not be in serialized JSON"
+        );
+        assert!(
+            !json.contains("plugin_c"),
+            "Enabled plugin_c should not be in serialized JSON"
+        );
+
+        // Deserialize back
+        let deserialized: PartialConfig = serde_json::from_str(&json).unwrap();
+
+        // Verify plugins section only contains the disabled one
+        let plugins = deserialized.plugins.unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert!(plugins.contains_key("plugin_b"));
+        assert_eq!(plugins.get("plugin_b").unwrap().enabled, Some(false));
     }
 }

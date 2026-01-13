@@ -226,6 +226,12 @@ pub struct FileExplorerState {
     /// Scroll offset
     #[serde(default)]
     pub scroll_offset: usize,
+    /// Show hidden files (fixes #569)
+    #[serde(default)]
+    pub show_hidden: bool,
+    /// Show gitignored files (fixes #569)
+    #[serde(default)]
+    pub show_gitignored: bool,
 }
 
 impl Default for FileExplorerState {
@@ -235,6 +241,8 @@ impl Default for FileExplorerState {
             width_percent: 0.3,
             expanded_dirs: Vec::new(),
             scroll_offset: 0,
+            show_hidden: false,
+            show_gitignored: false,
         }
     }
 }
@@ -1086,6 +1094,8 @@ mod tests {
                 PathBuf::from("tests"),
             ],
             scroll_offset: 5,
+            show_hidden: true,
+            show_gitignored: false,
         };
 
         let json = serde_json::to_string(&state).unwrap();
@@ -1095,5 +1105,7 @@ mod tests {
         assert_eq!(restored.width_percent, 0.25);
         assert_eq!(restored.expanded_dirs.len(), 3);
         assert_eq!(restored.scroll_offset, 5);
+        assert!(restored.show_hidden);
+        assert!(!restored.show_gitignored);
     }
 }

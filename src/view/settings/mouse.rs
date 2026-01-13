@@ -30,7 +30,7 @@ impl EntryDialogLayout {
             return None;
         }
 
-        let dialog_width = (modal.width * 85 / 100).min(90).max(50);
+        let dialog_width = (modal.width * 85 / 100).clamp(50, 90);
         let dialog_height = (modal.height * 90 / 100).max(15);
         let dialog_x = modal.x + (modal.width.saturating_sub(dialog_width)) / 2;
         let dialog_y = modal.y + (modal.height.saturating_sub(dialog_height)) / 2;
@@ -232,13 +232,15 @@ impl Editor {
                 }
             }
             SettingsHit::ControlMapRow(idx, row_idx) => {
-                if let Some(ref mut state) = self.settings_state {
+                let is_add_new_row = if let Some(ref mut state) = self.settings_state {
                     state.focus_panel = FocusPanel::Settings;
                     state.selected_item = idx;
 
+                    let mut is_add_new = false;
                     if let Some(page) = state.pages.get_mut(state.selected_category) {
                         if let Some(item) = page.items.get_mut(idx) {
                             if let SettingControl::Map(map_state) = &mut item.control {
+                                is_add_new = row_idx >= map_state.entries.len();
                                 map_state.focused_entry = if row_idx < map_state.entries.len() {
                                     Some(row_idx)
                                 } else {
@@ -247,8 +249,12 @@ impl Editor {
                             }
                         }
                     }
-                }
-                if is_double_click {
+                    is_add_new
+                } else {
+                    false
+                };
+                // "Add new" row activates on single click (#604), entries require double-click
+                if is_add_new_row || is_double_click {
                     self.settings_activate_current();
                 }
             }
@@ -383,7 +389,7 @@ impl Editor {
 
         // Check button hover
         if row == layout.button_y {
-            let buttons: &[&str] = if dialog.is_new {
+            let buttons: &[&str] = if dialog.is_new || dialog.no_delete {
                 &["[ Save ]", "[ Cancel ]"]
             } else {
                 &["[ Save ]", "[ Delete ]", "[ Cancel ]"]
@@ -401,15 +407,27 @@ impl Editor {
             }
         }
 
-        // Check item hover
+        // Check item hover (only for editable items)
         if layout.in_content_area(col, row) {
             let click_y = (row - layout.inner_y) as usize + dialog.scroll_offset;
             let mut content_y: usize = 0;
 
+            // Check if we have a separator between read-only and editable items
+            let first_editable = dialog.first_editable_index;
+            let has_separator = first_editable > 0 && first_editable < dialog.items.len();
+
             for (idx, item) in dialog.items.iter().enumerate() {
+                // Account for separator before first editable item
+                if has_separator && idx == first_editable {
+                    content_y += 1; // separator height
+                }
+
                 let item_end = content_y + item.control.control_height() as usize;
                 if click_y >= content_y && click_y < item_end {
-                    dialog.hover_item = Some(idx);
+                    // Only hover on editable items
+                    if !item.read_only {
+                        dialog.hover_item = Some(idx);
+                    }
                     break;
                 }
                 content_y = item_end;
@@ -458,7 +476,7 @@ impl Editor {
             return Ok(false);
         };
 
-        let buttons: &[&str] = if dialog.is_new {
+        let buttons: &[&str] = if dialog.is_new || dialog.no_delete {
             &["[ Save ]", "[ Cancel ]"]
         } else {
             &["[ Save ]", "[ Delete ]", "[ Cancel ]"]
@@ -493,9 +511,22 @@ impl Editor {
         let click_y = (row - layout.inner_y) as usize + dialog.scroll_offset;
         let mut content_y: usize = 0;
 
+        // Check if we have a separator between read-only and editable items
+        let first_editable = dialog.first_editable_index;
+        let has_separator = first_editable > 0 && first_editable < dialog.items.len();
+
         for (idx, item) in dialog.items.iter().enumerate() {
+            // Account for separator before first editable item
+            if has_separator && idx == first_editable {
+                content_y += 1; // separator height
+            }
+
             let item_end = content_y + item.control.control_height() as usize;
             if click_y >= content_y && click_y < item_end {
+                // Skip clicks on read-only items
+                if item.read_only {
+                    return Ok(false);
+                }
                 dialog.focus_on_buttons = false;
                 dialog.selected_item = idx;
                 dialog.update_focus_states();

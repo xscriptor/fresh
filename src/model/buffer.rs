@@ -57,21 +57,15 @@ pub const LOAD_CHUNK_SIZE: usize = 1024 * 1024;
 pub const CHUNK_ALIGNMENT: usize = 64 * 1024;
 
 /// Line ending format used in the file
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LineEnding {
     /// Unix/Linux/Mac format (\n)
+    #[default]
     LF,
     /// Windows format (\r\n)
     CRLF,
     /// Old Mac format (\r) - rare but supported
     CR,
-}
-
-impl Default for LineEnding {
-    fn default() -> Self {
-        // Default to LF (Unix) for new files
-        Self::LF
-    }
 }
 
 impl LineEnding {
@@ -416,6 +410,32 @@ impl TextBuffer {
     /// Tries to create the file in the same directory as the destination file first
     /// to allow for an atomic rename. If that fails (e.g., due to directory permissions),
     /// falls back to the system temporary directory.
+    /// Check if we should use in-place writing to preserve file ownership.
+    /// Returns true if the file exists and is owned by a different user.
+    /// On Unix, only root or the file owner can change file ownership with chown.
+    /// When the current user is not the file owner, using atomic write (temp file + rename)
+    /// would change the file's ownership to the current user. To preserve ownership,
+    /// we must write directly to the existing file instead.
+    #[cfg(unix)]
+    fn should_use_inplace_write(dest_path: &Path) -> bool {
+        if let Ok(meta) = std::fs::metadata(dest_path) {
+            let file_uid = meta.uid();
+            let current_uid = unsafe { libc::getuid() };
+            // If file is owned by a different user, we should write in-place
+            // to preserve ownership (since we can't chown to another user)
+            file_uid != current_uid
+        } else {
+            // File doesn't exist, use normal atomic write
+            false
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn should_use_inplace_write(_dest_path: &Path) -> bool {
+        // On non-Unix platforms, always use atomic write
+        false
+    }
+
     fn create_temp_file(dest_path: &Path) -> io::Result<(PathBuf, std::fs::File)> {
         // Try creating in same directory first
         let same_dir_temp = dest_path.with_extension("tmp");
@@ -464,8 +484,25 @@ impl TextBuffer {
         let needs_conversion = self.line_ending != self.original_line_ending;
         let target_ending = self.line_ending;
 
-        // Stage A: Temporary File Creation
-        let (temp_path, mut out_file) = Self::create_temp_file(dest_path)?;
+        // Determine whether to use in-place writing to preserve file ownership.
+        // When the file is owned by a different user (e.g., editing with group write
+        // permissions), we must write directly to the file to preserve ownership,
+        // since non-root users cannot chown files to other users.
+        let use_inplace = Self::should_use_inplace_write(dest_path);
+
+        // Stage A: Create output file (either temp file or open existing for in-place write)
+        let (temp_path, mut out_file) = if use_inplace {
+            // In-place write: open existing file with truncate to preserve ownership
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(dest_path)?;
+            (None, file)
+        } else {
+            // Atomic write: create temp file, will rename later
+            let (path, file) = Self::create_temp_file(dest_path)?;
+            (Some(path), file)
+        };
 
         if total > 0 {
             // Cache for open source files (for streaming unloaded regions)
@@ -546,40 +583,45 @@ impl TextBuffer {
         out_file.sync_all()?;
         drop(out_file);
 
-        // Restore original file permissions/owner before renaming
-        if let Some(ref meta) = original_metadata {
-            // Best effort restore
-            let _ = Self::restore_file_metadata(&temp_path, meta);
-        }
+        // Stage B & C: Only needed for atomic write (not in-place write)
+        if let Some(temp_path) = temp_path {
+            // Restore original file permissions/owner before renaming
+            if let Some(ref meta) = original_metadata {
+                // Best effort restore
+                let _ = Self::restore_file_metadata(&temp_path, meta);
+            }
 
-        // Stage C: Atomic Replacement or Sudo Fallback
-        if let Err(e) = std::fs::rename(&temp_path, dest_path) {
-            let is_permission_denied = e.kind() == io::ErrorKind::PermissionDenied;
-            let is_cross_device = cfg!(unix) && e.raw_os_error() == Some(18);
+            // Stage C: Atomic Replacement or Sudo Fallback
+            if let Err(e) = std::fs::rename(&temp_path, dest_path) {
+                let is_permission_denied = e.kind() == io::ErrorKind::PermissionDenied;
+                let is_cross_device = cfg!(unix) && e.raw_os_error() == Some(18);
 
-            if is_cross_device {
-                #[cfg(unix)]
-                {
-                    match std::fs::copy(&temp_path, dest_path) {
-                        Ok(_) => {
-                            let _ = std::fs::remove_file(&temp_path);
+                if is_cross_device {
+                    #[cfg(unix)]
+                    {
+                        match std::fs::copy(&temp_path, dest_path) {
+                            Ok(_) => {
+                                let _ = std::fs::remove_file(&temp_path);
+                            }
+                            Err(copy_err) if copy_err.kind() == io::ErrorKind::PermissionDenied => {
+                                return Err(self.make_sudo_error(
+                                    temp_path,
+                                    dest_path,
+                                    original_metadata,
+                                ));
+                            }
+                            Err(copy_err) => return Err(copy_err.into()),
                         }
-                        Err(copy_err) if copy_err.kind() == io::ErrorKind::PermissionDenied => {
-                            return Err(self.make_sudo_error(
-                                temp_path,
-                                dest_path,
-                                original_metadata,
-                            ));
-                        }
-                        Err(copy_err) => return Err(copy_err.into()),
                     }
+                } else if is_permission_denied {
+                    return Err(self.make_sudo_error(temp_path, dest_path, original_metadata));
+                } else {
+                    return Err(e.into());
                 }
-            } else if is_permission_denied {
-                return Err(self.make_sudo_error(temp_path, dest_path, original_metadata));
-            } else {
-                return Err(e.into());
             }
         }
+        // For in-place write, we already wrote directly to dest_path,
+        // preserving ownership since we modified the existing inode
 
         // Update saved file size to match the file on disk
         let new_size = std::fs::metadata(dest_path)?.len() as usize;
@@ -697,8 +739,8 @@ impl TextBuffer {
         if Arc::ptr_eq(&self.saved_root, &self.piece_tree.root()) {
             return PieceTreeDiff {
                 equal: true,
-                byte_ranges: vec![0..0],
-                line_ranges: Some(vec![0..0]),
+                byte_ranges: Vec::new(),
+                line_ranges: Some(Vec::new()),
             };
         }
 
@@ -733,8 +775,8 @@ impl TextBuffer {
                 // Content is the same despite structure differences (rare case: undo/redo)
                 return PieceTreeDiff {
                     equal: true,
-                    byte_ranges: vec![0..0],
-                    line_ranges: Some(vec![0..0]),
+                    byte_ranges: Vec::new(),
+                    line_ranges: Some(Vec::new()),
                 };
             }
         }
@@ -1128,7 +1170,7 @@ impl TextBuffer {
         let delta = self
             .piece_tree
             .apply_bulk_edits(edits, &self.buffers, |_text| {
-                let info = buffer_info[idx].clone();
+                let info = buffer_info[idx];
                 idx += 1;
                 info
             });
@@ -1909,13 +1951,7 @@ impl TextBuffer {
             return None;
         }
 
-        for i in 0..=haystack.len() - needle.len() {
-            if &haystack[i..i + needle.len()] == needle {
-                return Some(i);
-            }
-        }
-
-        None
+        (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
     }
 
     /// Find the next occurrence of a regex pattern, with wrap-around
@@ -2038,20 +2074,16 @@ impl TextBuffer {
 
         // Keep searching and replacing
         // Note: we search forward from last replacement to handle growth/shrinkage
-        loop {
-            // Find next occurrence (no wrap-around for replace_all)
-            if let Some(found_pos) = self.find_next_in_range(pattern, pos, Some(0..self.len())) {
-                self.replace_range(found_pos..found_pos + pattern.len(), replacement);
-                count += 1;
+        // Find next occurrence (no wrap-around for replace_all)
+        while let Some(found_pos) = self.find_next_in_range(pattern, pos, Some(0..self.len())) {
+            self.replace_range(found_pos..found_pos + pattern.len(), replacement);
+            count += 1;
 
-                // Move past the replacement
-                pos = found_pos + replacement.len();
+            // Move past the replacement
+            pos = found_pos + replacement.len();
 
-                // If we're at or past the end, stop
-                if pos >= self.len() {
-                    break;
-                }
-            } else {
+            // If we're at or past the end, stop
+            if pos >= self.len() {
                 break;
             }
         }
@@ -2064,23 +2096,18 @@ impl TextBuffer {
         let mut count = 0;
         let mut pos = 0;
 
-        loop {
-            if let Some(found_pos) = self.find_next_regex_in_range(regex, pos, Some(0..self.len()))
-            {
-                // Get the match to find its length
-                let text = self
-                    .get_text_range_mut(found_pos, self.len() - found_pos)
-                    .context("Failed to read text for regex match")?;
+        while let Some(found_pos) = self.find_next_regex_in_range(regex, pos, Some(0..self.len())) {
+            // Get the match to find its length
+            let text = self
+                .get_text_range_mut(found_pos, self.len() - found_pos)
+                .context("Failed to read text for regex match")?;
 
-                if let Some(mat) = regex.find(&text) {
-                    self.replace_range(found_pos..found_pos + mat.len(), replacement);
-                    count += 1;
-                    pos = found_pos + replacement.len();
+            if let Some(mat) = regex.find(&text) {
+                self.replace_range(found_pos..found_pos + mat.len(), replacement);
+                count += 1;
+                pos = found_pos + replacement.len();
 
-                    if pos >= self.len() {
-                        break;
-                    }
-                } else {
+                if pos >= self.len() {
                     break;
                 }
             } else {
@@ -2223,8 +2250,7 @@ impl TextBuffer {
         };
 
         // Start from index 1 (we want the NEXT boundary)
-        for i in 1..bytes.len() {
-            let byte = bytes[i];
+        for (i, &byte) in bytes.iter().enumerate().skip(1) {
             // Check if this is a UTF-8 leading byte (not a continuation byte)
             if (byte & 0b1100_0000) != 0b1000_0000 {
                 return pos + i;

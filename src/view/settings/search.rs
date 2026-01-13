@@ -181,6 +181,9 @@ mod tests {
             control: SettingControl::Toggle(ToggleState::new(false, name)),
             default: None,
             modified: false,
+            layer_source: crate::config_io::ConfigLayer::System,
+            read_only: false,
+            is_auto_managed: false,
         }
     }
 
