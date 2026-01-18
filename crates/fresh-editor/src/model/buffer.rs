@@ -493,11 +493,20 @@ impl TextBuffer {
         // Stage A: Create output file (either temp file or open existing for in-place write)
         let (temp_path, mut out_file) = if use_inplace {
             // In-place write: open existing file with truncate to preserve ownership
-            let file = std::fs::OpenOptions::new()
+            match std::fs::OpenOptions::new()
                 .write(true)
                 .truncate(true)
-                .open(dest_path)?;
-            (None, file)
+                .open(dest_path)
+            {
+                Ok(file) => (None, file),
+                Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                    // Permission denied on in-place write: fall back to atomic write
+                    // with temp file. The rename will also fail, triggering SudoSaveRequired.
+                    let (path, file) = Self::create_temp_file(dest_path)?;
+                    (Some(path), file)
+                }
+                Err(e) => return Err(e.into()),
+            }
         } else {
             // Atomic write: create temp file, will rename later
             let (path, file) = Self::create_temp_file(dest_path)?;
