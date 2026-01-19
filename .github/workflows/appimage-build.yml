@@ -66,15 +66,15 @@ jobs:
 
       - name: Build AppImage
         run: |
-          ./scripts/build-appimage.sh binary "$VERSION" "${{ matrix.arch }}"
+          ./crates/fresh-editor/scripts/build-appimage.sh binary "$VERSION" "${{ matrix.arch }}"
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v6
         with:
           name: artifacts-appimage-${{ matrix.arch }}
           path: |
-            fresh-editor-*.AppImage
-            fresh-editor-*.AppImage.sha256
+            crates/fresh-editor/fresh-editor-*.AppImage
+            crates/fresh-editor/fresh-editor-*.AppImage.sha256
 
   # Test AppImage on multiple distributions
   test-appimage:

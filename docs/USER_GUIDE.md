@@ -18,7 +18,18 @@ fresh
 
 # Open a file
 fresh src/main.rs
+
+# Open a file at a specific line
+fresh src/main.rs:42
+
+# Open a file at a specific line and column
+fresh src/main.rs:42:10
+
+# Open multiple files (with optional line:col)
+fresh Cargo.toml src/lib.rs:100:5
 ```
+
+The `file:line:col` syntax is useful for jumping directly to compiler errors or search results.
 
 ### Core Concepts
 

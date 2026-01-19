@@ -16,11 +16,11 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             arch: amd64
             rpm_arch: x86_64
-            runner: ubuntu-22.04
+            runner: ubuntu-20.04
           - target: aarch64-unknown-linux-gnu
             arch: arm64
             rpm_arch: aarch64
-            runner: ubuntu-22.04
+            runner: ubuntu-20.04
     runs-on: ${{ matrix.runner }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -43,7 +43,7 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 
       - name: Install cargo-deb and cargo-generate-rpm
         run: |
@@ -65,11 +65,18 @@ jobs:
           fi
           ls -la target/${{ matrix.target }}/release/fresh
 
+      - name: Setup target symlink for packaging
+        run: |
+          # cargo-deb/generate-rpm configs use paths relative to crate dir
+          # Create symlink so target/release paths resolve to workspace target
+          ln -s ../../target crates/fresh-editor/target
+
       - name: Build .deb package
         run: |
           cargo deb --no-build --target ${{ matrix.target }}
 
       - name: Build .rpm package
+        working-directory: crates/fresh-editor
         run: |
           cargo generate-rpm --target ${{ matrix.target }}
 
@@ -78,7 +85,7 @@ jobs:
           mkdir -p packages
           # Find and copy deb package
           find target/${{ matrix.target }}/debian -name "*.deb" -exec cp {} packages/ \;
-          # Find and copy rpm package
+          # Find and copy rpm package (symlink makes it end up in workspace target)
           find target/${{ matrix.target }}/generate-rpm -name "*.rpm" -exec cp {} packages/ \;
           ls -la packages/
 
