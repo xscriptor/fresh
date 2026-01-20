@@ -358,8 +358,10 @@ impl Editor {
                     if let Some(item) = state.current_item_mut() {
                         if let SettingControl::Map(ref mut map_state) = item.control {
                             if map_state.focused_entry.is_none() {
-                                // On add-new row: start editing to add new entry
-                                state.start_editing();
+                                // On add-new row: open dialog with empty key
+                                if map_state.value_schema.is_some() {
+                                    state.open_add_entry_dialog();
+                                }
                             } else if map_state.value_schema.is_some() {
                                 // Map has schema: open entry dialog
                                 state.open_entry_dialog();

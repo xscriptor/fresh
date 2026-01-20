@@ -270,10 +270,12 @@ impl SettingControl {
                 // 1 for label + items count + 1 for add-new row
                 (state.items.len() + 2) as u16
             }
-            // Map needs: 1 label + entries + expanded content + 1 add-new row
+            // Map needs: 1 label + 1 header (if display_field) + entries + expanded content + 1 add-new row (if allowed)
             Self::Map(state) => {
-                let base = 1 + state.entries.len() + 1; // label + entries + add-new
-                                                        // Add extra height for expanded entries (up to 6 lines each)
+                let header_row = if state.display_field.is_some() { 1 } else { 0 };
+                let add_new_row = if state.no_add { 0 } else { 1 };
+                let base = 1 + header_row + state.entries.len() + add_new_row; // label + header? + entries + add-new?
+                                                                               // Add extra height for expanded entries (up to 6 lines each)
                 let expanded_height: usize = state
                     .expanded
                     .iter()

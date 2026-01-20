@@ -932,6 +932,7 @@ fn render_control(
             let map_layout = render_map_partial(frame, area, state, &colors, 20, skip_rows);
             ControlLayoutInfo::Map {
                 entry_rows: map_layout.entry_areas.iter().map(|e| e.row_area).collect(),
+                add_row_area: map_layout.add_row_area,
             }
         }
 
@@ -1656,6 +1657,7 @@ pub enum ControlLayoutInfo {
     },
     Map {
         entry_rows: Vec<Rect>,
+        add_row_area: Option<Rect>,
     },
     ObjectArray {
         entry_rows: Vec<Rect>,

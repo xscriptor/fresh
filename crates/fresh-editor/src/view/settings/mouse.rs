@@ -258,6 +258,23 @@ impl Editor {
                     self.settings_activate_current();
                 }
             }
+            SettingsHit::ControlMapAddNew(idx) => {
+                // Click on map add-new row - focus it and activate immediately
+                if let Some(ref mut state) = self.settings_state {
+                    state.focus_panel = FocusPanel::Settings;
+                    state.selected_item = idx;
+
+                    if let Some(page) = state.pages.get_mut(state.selected_category) {
+                        if let Some(item) = page.items.get_mut(idx) {
+                            if let SettingControl::Map(map_state) = &mut item.control {
+                                map_state.focused_entry = None; // Focus add-new row
+                            }
+                        }
+                    }
+                }
+                // Single click on add-new activates immediately
+                self.settings_activate_current();
+            }
             SettingsHit::LayerButton => {
                 if let Some(ref mut state) = self.settings_state {
                     state.cycle_target_layer();

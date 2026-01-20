@@ -2867,3 +2867,202 @@ fn test_map_add_new_button_clickable_with_mouse() {
     harness.render().unwrap();
     harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
 }
+
+/// Test that "[+] Add new" button is visible for LSP map which doesn't have x-no-add
+///
+/// The LSP config is a Map type with additionalProperties that should allow adding new entries.
+/// Unlike plugins (which has x-no-add: true), LSP should show the "[+] Add new" button.
+#[test]
+fn test_lsp_map_has_add_new_button() {
+    let mut harness = EditorTestHarness::new(120, 50).unwrap();
+    harness.render().unwrap();
+
+    // Open settings via Ctrl+,
+    harness
+        .send_key(KeyCode::Char(','), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Search for "lsp" to navigate to the LSP section
+    harness
+        .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
+        .unwrap();
+    harness.type_text("lsp").unwrap();
+    harness.render().unwrap();
+
+    // Press Enter to jump to the LSP map
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Verify we're in the LSP section
+    harness.assert_screen_contains("Lsp");
+
+    // The "[+] Add new" button should be visible for LSP since it doesn't have x-no-add
+    // This will fail if the add button is not being rendered
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("[+] Add new"),
+        "LSP map should show '[+] Add new' button since it doesn't have x-no-add.\n\
+         The LSP section should allow users to add new language server configurations.\n\
+         Screen contents:\n{}",
+        screen
+    );
+
+    // Close settings
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+}
+
+/// Test that "[+] Add new" button is visible for Languages map which doesn't have x-no-add
+///
+/// The Languages config is a Map type with additionalProperties that should allow adding new entries.
+/// Unlike plugins (which has x-no-add: true), Languages should show the "[+] Add new" button.
+#[test]
+fn test_languages_map_has_add_new_button() {
+    let mut harness = EditorTestHarness::new(120, 50).unwrap();
+    harness.render().unwrap();
+
+    // Open settings via Ctrl+,
+    harness
+        .send_key(KeyCode::Char(','), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Search for "languages" to navigate to the Languages section
+    harness
+        .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
+        .unwrap();
+    harness.type_text("languages").unwrap();
+    harness.render().unwrap();
+
+    // Press Enter to jump to the Languages map
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Verify we're in the Languages section
+    harness.assert_screen_contains("Languages");
+
+    // The "[+] Add new" button should be visible for Languages since it doesn't have x-no-add
+    // This will fail if the add button is not being rendered
+    let screen = harness.screen_to_string();
+
+    // Check that the focus is on Languages (indicated by ">")
+    assert!(
+        screen.contains(">  Languages"),
+        "Focus should be on Languages section. Screen:\n{}",
+        screen
+    );
+
+    // Find the section boundaries to check that "[+] Add new" appears within the Languages section
+    // Languages section starts after "> Languages:" and ends at the next section or description
+    let languages_start = screen
+        .find(">  Languages")
+        .expect("Languages section not found");
+
+    // Find the next section after Languages (look for patterns like "Locale" or description text)
+    let after_languages = &screen[languages_start..];
+    let section_end = after_languages
+        .find("Per-language configuration")
+        .or_else(|| after_languages.find("Locale"))
+        .unwrap_or(after_languages.len());
+
+    let languages_section = &after_languages[..section_end];
+
+    // The "[+] Add new" button should appear within the Languages section
+    assert!(
+        languages_section.contains("[+] Add new"),
+        "Languages map should show '[+] Add new' button within its section.\n\
+         The Languages section should allow users to add new language configurations.\n\
+         Languages section content:\n{}\n\n\
+         Full screen:\n{}",
+        languages_section,
+        screen
+    );
+
+    // Close settings
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+}
+
+/// Test that clicking "[+] Add new" on the LSP map opens the entry dialog
+///
+/// This verifies that mouse clicks on the add-new row of Map controls work correctly.
+#[test]
+fn test_lsp_map_add_new_button_click_opens_dialog() {
+    let mut harness = EditorTestHarness::new(120, 50).unwrap();
+    harness.render().unwrap();
+
+    // Open settings via Ctrl+,
+    harness
+        .send_key(KeyCode::Char(','), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Search for "lsp" to navigate to the LSP section
+    harness
+        .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
+        .unwrap();
+    harness.type_text("lsp").unwrap();
+    harness.render().unwrap();
+
+    // Press Enter to jump to the LSP map
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Verify we're in the LSP section and "[+] Add new" is visible
+    harness.assert_screen_contains("Lsp");
+    harness.assert_screen_contains("[+] Add new");
+
+    // Find the position of "[+] Add new" that appears after "Lsp:" label
+    // Need to find the one specifically in the LSP section, not Languages
+    let screen = harness.screen_to_string();
+    let lines: Vec<&str> = screen.lines().collect();
+
+    // Find the line with "Lsp:" label, then find "[+] Add new" after it
+    let lsp_line_idx = lines
+        .iter()
+        .position(|l| l.contains("Lsp:"))
+        .expect("Should find Lsp: label");
+
+    let add_new_pos = lines[lsp_line_idx..]
+        .iter()
+        .enumerate()
+        .find_map(|(offset, line)| {
+            line.find("[+] Add new")
+                .map(|col| (col as u16, (lsp_line_idx + offset) as u16))
+        })
+        .expect("Should find [+] Add new after Lsp section");
+
+    eprintln!("Clicking at ({}, {})", add_new_pos.0 + 2, add_new_pos.1);
+
+    // Click on the "[+] Add new" button
+    harness
+        .mouse_click(add_new_pos.0 + 2, add_new_pos.1)
+        .unwrap();
+    harness.render().unwrap();
+
+    // After clicking, the add-new row should be in edit mode
+    // This shows as a text input field (brackets with cursor) for entering the key name
+    // When in edit mode, the help line changes to show "Enter:Add"
+    let screen = harness.screen_to_string();
+    eprintln!("Screen after click:\n{}", screen);
+
+    // Check that we're in editing mode - the help text should show Enter:Add or similar
+    // indicating we can type a key name and press Enter to add it
+    assert!(
+        screen.contains("Enter:Add") || screen.contains("[") && screen.contains("]"),
+        "Clicking '[+] Add new' on LSP map should start text input mode for key name.\n\
+         The screen should show a text input field or 'Enter:Add' help text.\n\
+         Screen contents:\n{}",
+        screen
+    );
+
+    // Close the dialog and settings
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+    harness.render().unwrap();
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+}

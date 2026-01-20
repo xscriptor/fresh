@@ -181,7 +181,16 @@ impl SettingsLayout {
                             }
                         }
                     }
-                    ControlLayoutInfo::Map { entry_rows } => {
+                    ControlLayoutInfo::Map {
+                        entry_rows,
+                        add_row_area,
+                    } => {
+                        // Check click on add-new row first (so it has priority)
+                        if let Some(add_area) = add_row_area {
+                            if self.contains(*add_area, x, y) {
+                                return Some(SettingsHit::ControlMapAddNew(item.index));
+                            }
+                        }
                         for (row_idx, row_area) in entry_rows.iter().enumerate() {
                             if self.contains(*row_area, x, y) {
                                 return Some(SettingsHit::ControlMapRow(item.index, row_idx));
@@ -255,6 +264,8 @@ pub enum SettingsHit {
     ControlTextListRow(usize, usize),
     /// Click on map row (item_idx, row_idx)
     ControlMapRow(usize, usize),
+    /// Click on map add-new row (item_idx)
+    ControlMapAddNew(usize),
     /// Click on layer button
     LayerButton,
     /// Click on edit config file button
