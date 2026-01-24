@@ -17,7 +17,7 @@
 //! - Other syntax-aware features
 
 use crate::model::buffer::Buffer;
-use crate::primitives::grammar_registry::GrammarRegistry;
+use crate::primitives::grammar::GrammarRegistry;
 use crate::primitives::highlighter::{
     highlight_color, HighlightCategory, HighlightSpan, Highlighter, Language,
 };
@@ -640,6 +640,51 @@ impl HighlightEngine {
         Self::None
     }
 
+    /// Create a highlighting engine for a specific tree-sitter language.
+    ///
+    /// This is useful when manually setting the language (e.g., from UI).
+    /// Uses tree-sitter for the specified language.
+    pub fn for_language(language: Language) -> Self {
+        if let Ok(highlighter) = Highlighter::new(language) {
+            Self::TreeSitter(Box::new(highlighter))
+        } else {
+            Self::None
+        }
+    }
+
+    /// Create a highlighting engine for a syntax by name.
+    ///
+    /// This looks up the syntax in the grammar registry and creates a TextMate
+    /// highlighter for it. This supports all syntect syntaxes (100+) including
+    /// user-configured grammars.
+    ///
+    /// The `ts_language` parameter optionally provides a tree-sitter language
+    /// for non-highlighting features (indentation, semantic highlighting).
+    pub fn for_syntax_name(
+        name: &str,
+        registry: &GrammarRegistry,
+        ts_language: Option<Language>,
+    ) -> Self {
+        let syntax_set = registry.syntax_set_arc();
+
+        if let Some(syntax) = registry.find_syntax_by_name(name) {
+            // Find the index of this syntax in the set
+            if let Some(index) = syntax_set
+                .syntaxes()
+                .iter()
+                .position(|s| s.name == syntax.name)
+            {
+                return Self::TextMate(Box::new(TextMateEngine::with_language(
+                    syntax_set,
+                    index,
+                    ts_language,
+                )));
+            }
+        }
+
+        Self::None
+    }
+
     /// Highlight the visible viewport
     ///
     /// `context_bytes` controls how far before/after the viewport to parse for accurate
@@ -840,6 +885,12 @@ fn merge_adjacent_highlight_spans(spans: &mut Vec<HighlightSpan>) {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use super::*;
     use crate::view::theme;
 
@@ -858,7 +909,8 @@ mod tests {
 
     #[test]
     fn test_textmate_backend_selection() {
-        let registry = GrammarRegistry::load();
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
 
         // Languages with TextMate grammars use TextMate for highlighting
         let engine = HighlightEngine::for_file(Path::new("test.rs"), &registry);
@@ -886,7 +938,8 @@ mod tests {
 
     #[test]
     fn test_tree_sitter_explicit_preference() {
-        let registry = GrammarRegistry::load();
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
 
         // Force tree-sitter for highlighting
         let engine = HighlightEngine::for_file_with_preference(
@@ -899,7 +952,8 @@ mod tests {
 
     #[test]
     fn test_unknown_extension() {
-        let registry = GrammarRegistry::load();
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
 
         // Unknown extension
         let engine = HighlightEngine::for_file(Path::new("test.unknown_xyz_123"), &registry);
@@ -918,13 +972,14 @@ mod tests {
         // - viewport_start > context_bytes (so parse_start > 0 after saturating_sub)
         // - parse_end = min(viewport_end + context_bytes, buffer.len()) = 0
         // - parse_end - parse_start would underflow (0 - positive = overflow)
-        let registry = GrammarRegistry::load();
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
 
         let mut engine = HighlightEngine::for_file(Path::new("test.rs"), &registry);
 
         // Create empty buffer
-        let buffer = Buffer::from_str("", 0);
-        let theme = Theme::from_name(theme::THEME_LIGHT).unwrap();
+        let buffer = Buffer::from_str("", 0, test_fs());
+        let theme = Theme::load_builtin(theme::THEME_LIGHT).unwrap();
 
         // Test the specific case that triggered the overflow:
         // viewport_start=100, context_bytes=10 => parse_start=90, parse_end=0
@@ -941,7 +996,8 @@ mod tests {
     /// offset drift per line because it strips line terminators.
     #[test]
     fn test_textmate_engine_crlf_byte_offsets() {
-        let registry = GrammarRegistry::load();
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
 
         let mut engine = HighlightEngine::for_file(Path::new("test.java"), &registry);
 
@@ -951,8 +1007,8 @@ mod tests {
         // Line 2: "public" at bytes 8-13 (after "public\r\n" = 8 bytes)
         // Line 3: "public" at bytes 16-21 (after two "public\r\n" = 16 bytes)
         let content = b"public\r\npublic\r\npublic\r\n";
-        let buffer = Buffer::from_bytes(content.to_vec());
-        let theme = Theme::from_name(theme::THEME_LIGHT).unwrap();
+        let buffer = Buffer::from_bytes(content.to_vec(), test_fs());
+        let theme = Theme::load_builtin(theme::THEME_LIGHT).unwrap();
 
         if let HighlightEngine::TextMate(ref mut tm) = engine {
             // Highlight the entire content
@@ -1003,5 +1059,75 @@ mod tests {
         } else {
             panic!("Expected TextMate engine for .java file");
         }
+    }
+
+    #[test]
+    fn test_git_rebase_todo_highlighting() {
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
+
+        // git-rebase-todo files should use the Git Rebase Todo grammar
+        let engine = HighlightEngine::for_file(Path::new("git-rebase-todo"), &registry);
+        assert_eq!(engine.backend_name(), "textmate");
+        assert!(engine.has_highlighting());
+    }
+
+    #[test]
+    fn test_git_commit_message_highlighting() {
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
+
+        // COMMIT_EDITMSG should use the Git Commit Message grammar
+        let engine = HighlightEngine::for_file(Path::new("COMMIT_EDITMSG"), &registry);
+        assert_eq!(engine.backend_name(), "textmate");
+        assert!(engine.has_highlighting());
+
+        // MERGE_MSG should also work
+        let engine = HighlightEngine::for_file(Path::new("MERGE_MSG"), &registry);
+        assert_eq!(engine.backend_name(), "textmate");
+        assert!(engine.has_highlighting());
+    }
+
+    #[test]
+    fn test_gitignore_highlighting() {
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
+
+        // .gitignore should use the Gitignore grammar
+        let engine = HighlightEngine::for_file(Path::new(".gitignore"), &registry);
+        assert_eq!(engine.backend_name(), "textmate");
+        assert!(engine.has_highlighting());
+
+        // .dockerignore should also work
+        let engine = HighlightEngine::for_file(Path::new(".dockerignore"), &registry);
+        assert_eq!(engine.backend_name(), "textmate");
+        assert!(engine.has_highlighting());
+    }
+
+    #[test]
+    fn test_gitconfig_highlighting() {
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
+
+        // .gitconfig should use the Git Config grammar
+        let engine = HighlightEngine::for_file(Path::new(".gitconfig"), &registry);
+        assert_eq!(engine.backend_name(), "textmate");
+        assert!(engine.has_highlighting());
+
+        // .gitmodules should also work
+        let engine = HighlightEngine::for_file(Path::new(".gitmodules"), &registry);
+        assert_eq!(engine.backend_name(), "textmate");
+        assert!(engine.has_highlighting());
+    }
+
+    #[test]
+    fn test_gitattributes_highlighting() {
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::new());
+
+        // .gitattributes should use the Git Attributes grammar
+        let engine = HighlightEngine::for_file(Path::new(".gitattributes"), &registry);
+        assert_eq!(engine.backend_name(), "textmate");
+        assert!(engine.has_highlighting());
     }
 }

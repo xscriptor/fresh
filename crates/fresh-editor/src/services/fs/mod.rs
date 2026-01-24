@@ -1,14 +1,15 @@
-// Filesystem abstraction layer for async, pluggable file system access
+// Filesystem service layer for async, pluggable file system access
 //
-// This module provides a clean abstraction over filesystem operations,
-// designed to work efficiently with both local and network filesystems.
+// This module provides async filesystem operations with request deduplication
+// and batching, wrapping the core FileSystem trait from model/filesystem.
 
-pub mod backend;
-pub mod local;
 pub mod manager;
 pub mod slow;
 
-pub use backend::{FsBackend, FsEntry, FsEntryType, FsMetadata};
-pub use local::LocalFsBackend;
+// Re-export types from model::filesystem for convenience
+pub use crate::model::filesystem::{
+    DirEntry, EntryType, FileMetadata, FilePermissions, FileReader, FileSystem, FileSystemExt,
+    FileWriter, NoopFileSystem, StdFileSystem,
+};
 pub use manager::FsManager;
-pub use slow::{BackendMetrics, SlowFsBackend, SlowFsConfig};
+pub use slow::{BackendMetrics, SlowFileSystem, SlowFsConfig};

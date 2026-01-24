@@ -1,7 +1,7 @@
 use super::ignore::IgnorePatterns;
 use super::node::NodeId;
 use super::tree::FileTree;
-use crate::services::fs::FsEntry;
+use crate::model::filesystem::DirEntry;
 
 /// View state for file tree navigation and filtering
 #[derive(Debug)]
@@ -269,7 +269,7 @@ impl FileTreeView {
     }
 
     /// Get selected node entry (convenience method)
-    pub fn get_selected_entry(&self) -> Option<&FsEntry> {
+    pub fn get_selected_entry(&self) -> Option<&DirEntry> {
         self.selected_node
             .and_then(|id| self.tree.get_node(id))
             .map(|node| &node.entry)
@@ -371,7 +371,8 @@ impl FileTreeView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::fs::{FsManager, LocalFsBackend};
+    use crate::model::filesystem::StdFileSystem;
+    use crate::services::fs::FsManager;
     use std::fs as std_fs;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -387,7 +388,7 @@ mod tests {
         std_fs::create_dir(temp_path.join("dir2")).unwrap();
         std_fs::write(temp_path.join("file3.txt"), "content3").unwrap();
 
-        let backend = Arc::new(LocalFsBackend::new());
+        let backend = Arc::new(StdFileSystem);
         let manager = Arc::new(FsManager::new(backend));
         let tree = FileTree::new(temp_path.to_path_buf(), manager)
             .await

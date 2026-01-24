@@ -302,6 +302,7 @@ pub enum Action {
     Close,
     CloseTab,
     Quit,
+    ForceQuit,
     Revert,
     ToggleAutoRevert,
     FormatBuffer,
@@ -480,6 +481,7 @@ pub enum Action {
     // Buffer settings (per-buffer overrides)
     SetTabSize,
     SetLineEnding,
+    SetLanguage,
     ToggleIndentationStyle,
     ToggleTabIndicators,
     ResetBufferSettings,
@@ -643,6 +645,7 @@ impl Action {
             "close" => Self::Close,
             "close_tab" => Self::CloseTab,
             "quit" => Self::Quit,
+            "force_quit" => Self::ForceQuit,
             "revert" => Self::Revert,
             "toggle_auto_revert" => Self::ToggleAutoRevert,
             "format_buffer" => Self::FormatBuffer,
@@ -1049,6 +1052,7 @@ impl KeybindingResolver {
         matches!(
             action,
             Action::Quit
+                | Action::ForceQuit
                 | Action::Save
                 | Action::SaveAs
                 | Action::ShowHelp
@@ -1072,6 +1076,7 @@ impl KeybindingResolver {
                 | Action::ShowHelp
                 | Action::ShowKeyboardShortcuts
                 | Action::Quit
+                | Action::ForceQuit
                 // Split navigation
                 | Action::NextSplit
                 | Action::PrevSplit
@@ -1577,6 +1582,7 @@ impl KeybindingResolver {
             Action::Close => t!("action.close"),
             Action::CloseTab => t!("action.close_tab"),
             Action::Quit => t!("action.quit"),
+            Action::ForceQuit => t!("action.force_quit"),
             Action::Revert => t!("action.revert"),
             Action::ToggleAutoRevert => t!("action.toggle_auto_revert"),
             Action::FormatBuffer => t!("action.format_buffer"),
@@ -1706,6 +1712,7 @@ impl KeybindingResolver {
             Action::SetBackgroundBlend => t!("action.set_background_blend"),
             Action::SetTabSize => t!("action.set_tab_size"),
             Action::SetLineEnding => t!("action.set_line_ending"),
+            Action::SetLanguage => t!("action.set_language"),
             Action::ToggleIndentationStyle => t!("action.toggle_indentation_style"),
             Action::ToggleTabIndicators => t!("action.toggle_tab_indicators"),
             Action::ResetBufferSettings => t!("action.reset_buffer_settings"),

@@ -40,6 +40,16 @@ proptest-regressions/
 .flatpak-builder/
 repo/
 
+# npm package development (template is the source of truth)
+crates/fresh-editor/npm-package/bin/
+crates/fresh-editor/npm-package/test-package/
+crates/fresh-editor/npm-package/*.tgz
+crates/fresh-editor/npm-package/plugins/
+crates/fresh-editor/npm-package/themes/
+crates/fresh-editor/npm-package/LICENSE
+crates/fresh-editor/npm-package/CHANGELOG.md
+
 # ts-rs auto-generated bindings (we use plugins/lib/fresh.d.ts instead)
 bindings/
 crates/fresh-editor/target
+

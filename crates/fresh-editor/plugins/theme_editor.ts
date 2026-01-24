@@ -1734,15 +1734,16 @@ async function doOpenThemeEditor(): Promise<void> {
 
   // Create virtual buffer in current split (no new split)
   editor.debug("[theme_editor] doOpenThemeEditor: calling createVirtualBuffer...");
-  const bufferId = await editor.createVirtualBuffer({
+  const result = await editor.createVirtualBuffer({
     name: "*Theme Editor*",
     mode: "theme-editor",
-    read_only: true,
+    readOnly: true,
     entries: entries,
-    show_line_numbers: false,
-    show_cursors: true,
-    editing_disabled: true,
+    showLineNumbers: false,
+    showCursors: true,
+    editingDisabled: true,
   });
+  const bufferId = result.bufferId;
   editor.debug(`[theme_editor] doOpenThemeEditor: createVirtualBuffer returned bufferId=${bufferId}`);
   editor.debug(`[theme_editor] doOpenThemeEditor: checking if bufferId !== null...`);
 
@@ -2097,5 +2098,4 @@ editor.registerCommand("%cmd.nav_prev", "%cmd.nav_prev_desc", "theme_editor_nav_
 // Plugin Initialization
 // =============================================================================
 
-editor.setStatus(editor.t("status.plugin_loaded"));
 editor.debug("Theme Editor plugin initialized - Use 'Edit Theme' command to open");

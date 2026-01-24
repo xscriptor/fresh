@@ -1,4 +1,4 @@
-/// <reference path="../types/fresh.d.ts" />
+/// <reference path="./lib/fresh.d.ts" />
 const editor = getEditor();
 
 /**
@@ -133,8 +133,9 @@ async function refreshGitExplorerDecorations() {
     } else {
       editor.setFileExplorerDecorations(NAMESPACE, decorations);
     }
-  } catch (_err) {
+  } catch (err) {
     editor.clearFileExplorerDecorations(NAMESPACE);
+    throw err;
   } finally {
     refreshInFlight = false;
   }

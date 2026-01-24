@@ -5,6 +5,7 @@
 
 use crate::app::Editor;
 use anyhow::Result as AnyhowResult;
+use rust_i18n::t;
 
 use super::items::SettingControl;
 use super::{FocusPanel, SettingsHit, SettingsLayout};
@@ -80,11 +81,34 @@ impl Editor {
         let col = mouse_event.column;
         let row = mouse_event.row;
 
-        // When confirm dialog or help overlay is open, consume all mouse events
+        // When help overlay is open, consume all mouse events
         if let Some(ref state) = self.settings_state {
-            if state.showing_confirm_dialog || state.showing_help {
+            if state.showing_help {
                 return Ok(false);
             }
+        }
+
+        // Handle confirm dialog mouse events
+        let showing_confirm = self
+            .settings_state
+            .as_ref()
+            .map(|s| s.showing_confirm_dialog)
+            .unwrap_or(false);
+        if showing_confirm {
+            match mouse_event.kind {
+                MouseEventKind::Moved => {
+                    let hover = self.get_confirm_dialog_button_at(col, row);
+                    if let Some(ref mut state) = self.settings_state {
+                        state.confirm_dialog_hover = hover;
+                    }
+                    return Ok(hover.is_some());
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    return self.handle_confirm_dialog_click(col, row);
+                }
+                _ => {}
+            }
+            return Ok(false);
         }
 
         // Handle mouse events for entry dialog
@@ -131,7 +155,15 @@ impl Editor {
                     let old_hit = state.hover_hit;
                     state.hover_position = Some((col, row));
                     state.hover_hit = hover_hit;
-                    return Ok(old_hit != hover_hit);
+
+                    // Update dropdown hover index when hovering over options
+                    let new_hover_idx = match hover_hit {
+                        Some(SettingsHit::ControlDropdownOption(_, opt_idx)) => Some(opt_idx),
+                        _ => None,
+                    };
+                    let hover_changed = state.set_dropdown_hover(new_hover_idx);
+
+                    return Ok(old_hit != hover_hit || hover_changed);
                 }
                 return Ok(false);
             }
@@ -177,7 +209,8 @@ impl Editor {
             if state.is_dropdown_open() {
                 let is_click_on_open_dropdown = matches!(
                     hit,
-                    SettingsHit::ControlDropdown(idx) if idx == state.selected_item
+                    SettingsHit::ControlDropdown(idx) | SettingsHit::ControlDropdownOption(idx, _)
+                        if idx == state.selected_item
                 );
                 if !is_click_on_open_dropdown {
                     state.dropdown_cancel();
@@ -197,6 +230,13 @@ impl Editor {
                     state.sub_focus = None;
                 }
             }
+            SettingsHit::SearchResult(idx) => {
+                // Click on search result - select it and jump to it (same as Enter)
+                if let Some(ref mut state) = self.settings_state {
+                    state.selected_search_result = idx;
+                    state.jump_to_search_result();
+                }
+            }
             SettingsHit::Item(idx) => {
                 if let Some(ref mut state) = self.settings_state {
                     state.focus_panel = FocusPanel::Settings;
@@ -209,6 +249,14 @@ impl Editor {
                     state.selected_item = idx;
                 }
                 self.settings_activate_current();
+            }
+            SettingsHit::ControlDropdownOption(idx, option_idx) => {
+                // Click on a dropdown option - select it and close dropdown
+                if let Some(ref mut state) = self.settings_state {
+                    state.focus_panel = FocusPanel::Settings;
+                    state.selected_item = idx;
+                    state.dropdown_select(option_idx);
+                }
             }
             SettingsHit::ControlDecrement(idx) => {
                 if let Some(ref mut state) = self.settings_state {
@@ -258,6 +306,23 @@ impl Editor {
                     self.settings_activate_current();
                 }
             }
+            SettingsHit::ControlMapAddNew(idx) => {
+                // Click on map add-new row - focus it and activate immediately
+                if let Some(ref mut state) = self.settings_state {
+                    state.focus_panel = FocusPanel::Settings;
+                    state.selected_item = idx;
+
+                    if let Some(page) = state.pages.get_mut(state.selected_category) {
+                        if let Some(item) = page.items.get_mut(idx) {
+                            if let SettingControl::Map(map_state) = &mut item.control {
+                                map_state.focused_entry = None; // Focus add-new row
+                            }
+                        }
+                    }
+                }
+                // Single click on add-new activates immediately
+                self.settings_activate_current();
+            }
             SettingsHit::LayerButton => {
                 if let Some(ref mut state) = self.settings_state {
                     state.cycle_target_layer();
@@ -266,7 +331,12 @@ impl Editor {
             SettingsHit::SaveButton => self.save_settings(),
             SettingsHit::CancelButton => {
                 if let Some(ref mut state) = self.settings_state {
-                    state.visible = false;
+                    if state.has_changes() {
+                        state.showing_confirm_dialog = true;
+                        state.confirm_dialog_selection = 0;
+                    } else {
+                        state.visible = false;
+                    }
                 }
             }
             SettingsHit::ResetButton => {
@@ -558,5 +628,88 @@ impl Editor {
             _ => state.close_entry_dialog(),
         }
         Ok(true)
+    }
+
+    fn handle_confirm_dialog_click(&mut self, col: u16, row: u16) -> AnyhowResult<bool> {
+        if let Some(idx) = self.get_confirm_dialog_button_at(col, row) {
+            match idx {
+                0 => self.save_settings_and_close(),
+                1 => self.discard_settings_and_close(),
+                2 => {
+                    if let Some(ref mut state) = self.settings_state {
+                        state.showing_confirm_dialog = false;
+                    }
+                }
+                _ => {}
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Returns which confirm dialog button (0-2) is at the given position, if any
+    fn get_confirm_dialog_button_at(&self, col: u16, row: u16) -> Option<usize> {
+        let modal_area = self
+            .cached_layout
+            .settings_layout
+            .as_ref()
+            .map(|l| l.modal_area)?;
+
+        let changes_count = self
+            .settings_state
+            .as_ref()
+            .map(|s| s.get_change_descriptions().len())
+            .unwrap_or(0);
+
+        // Calculate dialog dimensions (same as in render_confirm_dialog)
+        let dialog_width = 50u16.min(modal_area.width.saturating_sub(4));
+        let dialog_height = (7 + changes_count as u16)
+            .min(20)
+            .min(modal_area.height.saturating_sub(4));
+        let dialog_x = modal_area.x + (modal_area.width.saturating_sub(dialog_width)) / 2;
+        let dialog_y = modal_area.y + (modal_area.height.saturating_sub(dialog_height)) / 2;
+
+        let inner_x = dialog_x + 2;
+        let inner_width = dialog_width.saturating_sub(4);
+        let button_y = dialog_y + dialog_height - 3;
+
+        // Check if on button row
+        if row != button_y {
+            return None;
+        }
+
+        // Button labels (must match render_confirm_dialog)
+        let options = [
+            t!("confirm.save_and_exit").to_string(),
+            t!("confirm.discard").to_string(),
+            t!("confirm.cancel").to_string(),
+        ];
+        let total_width: u16 = options.iter().map(|o| o.len() as u16 + 4).sum::<u16>() + 4;
+        let mut x = inner_x + (inner_width.saturating_sub(total_width)) / 2;
+
+        for (idx, label) in options.iter().enumerate() {
+            let button_width = label.len() as u16 + 4;
+            if col >= x && col < x + button_width + 1 {
+                return Some(idx);
+            }
+            x += button_width + 3;
+        }
+
+        None
+    }
+
+    fn save_settings_and_close(&mut self) {
+        self.save_settings();
+        if let Some(ref mut state) = self.settings_state {
+            state.visible = false;
+            state.showing_confirm_dialog = false;
+        }
+    }
+
+    fn discard_settings_and_close(&mut self) {
+        if let Some(ref mut state) = self.settings_state {
+            state.visible = false;
+            state.showing_confirm_dialog = false;
+        }
     }
 }

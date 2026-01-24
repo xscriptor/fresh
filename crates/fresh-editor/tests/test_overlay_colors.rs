@@ -2,13 +2,18 @@
 use fresh::config::LARGE_FILE_THRESHOLD_BYTES;
 use fresh::model::event::CursorId;
 use fresh::model::event::{Event, OverlayFace as EventOverlayFace};
+use fresh::model::filesystem::StdFileSystem;
 use fresh::state::EditorState;
 use fresh::view::overlay::OverlayNamespace;
+
+fn test_fs() -> std::sync::Arc<dyn fresh::model::filesystem::FileSystem + Send + Sync> {
+    std::sync::Arc::new(StdFileSystem)
+}
 
 #[test]
 fn test_overlay_background_color_direct() {
     // Create a state with some content
-    let mut state = EditorState::new(80, 24, LARGE_FILE_THRESHOLD_BYTES as usize);
+    let mut state = EditorState::new(80, 24, LARGE_FILE_THRESHOLD_BYTES as usize, test_fs());
 
     // Insert text using proper event so marker list is updated
     let text = "// TODO: test".to_string();

@@ -514,7 +514,12 @@ fn test_large_file_save_preserves_unloaded_regions() {
     // Open with a threshold that will trigger large file mode
     // The file is ~50KB, use 1KB threshold
     let threshold = 1024;
-    let mut buffer = TextBuffer::load_from_file(&file_path, threshold).unwrap();
+    let mut buffer = TextBuffer::load_from_file(
+        &file_path,
+        threshold,
+        std::sync::Arc::new(fresh::model::filesystem::StdFileSystem),
+    )
+    .unwrap();
 
     // Verify we're in large file mode (line_count returns None for large files)
     assert!(

@@ -1,4 +1,4 @@
-use crate::services::fs::FsEntry;
+use crate::model::filesystem::DirEntry;
 use std::fmt;
 
 /// Unique identifier for a tree node
@@ -17,7 +17,7 @@ pub struct TreeNode {
     /// Unique identifier
     pub id: NodeId,
     /// Filesystem entry information
-    pub entry: FsEntry,
+    pub entry: DirEntry,
     /// Parent node ID (None for root)
     pub parent: Option<NodeId>,
     /// Child node IDs (for directories)
@@ -28,7 +28,7 @@ pub struct TreeNode {
 
 impl TreeNode {
     /// Create a new tree node
-    pub fn new(id: NodeId, entry: FsEntry, parent: Option<NodeId>) -> Self {
+    pub fn new(id: NodeId, entry: DirEntry, parent: Option<NodeId>) -> Self {
         let state = if entry.is_dir() {
             NodeState::Collapsed
         } else {
@@ -111,15 +111,15 @@ pub enum NodeState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::fs::{FsEntry, FsEntryType};
+    use crate::model::filesystem::{DirEntry, EntryType};
     use std::path::PathBuf;
 
     #[test]
     fn test_node_creation() {
-        let entry = FsEntry::new(
+        let entry = DirEntry::new(
             PathBuf::from("/test/file.txt"),
             "file.txt".to_string(),
-            FsEntryType::File,
+            EntryType::File,
         );
 
         let node = TreeNode::new(NodeId(0), entry, None);
@@ -133,10 +133,10 @@ mod tests {
 
     #[test]
     fn test_directory_node() {
-        let entry = FsEntry::new(
+        let entry = DirEntry::new(
             PathBuf::from("/test/dir"),
             "dir".to_string(),
-            FsEntryType::Directory,
+            EntryType::Directory,
         );
 
         let node = TreeNode::new(NodeId(1), entry, Some(NodeId(0)));
@@ -149,10 +149,10 @@ mod tests {
 
     #[test]
     fn test_node_states() {
-        let entry = FsEntry::new(
+        let entry = DirEntry::new(
             PathBuf::from("/test/dir"),
             "dir".to_string(),
-            FsEntryType::Directory,
+            EntryType::Directory,
         );
 
         let mut node = TreeNode::new(NodeId(0), entry, None);
@@ -179,26 +179,26 @@ mod tests {
         // Create a simple tree structure
         let root = TreeNode::new(
             NodeId(0),
-            FsEntry::new(PathBuf::from("/"), "/".to_string(), FsEntryType::Directory),
+            DirEntry::new(PathBuf::from("/"), "/".to_string(), EntryType::Directory),
             None,
         );
 
         let child1 = TreeNode::new(
             NodeId(1),
-            FsEntry::new(
+            DirEntry::new(
                 PathBuf::from("/dir1"),
                 "dir1".to_string(),
-                FsEntryType::Directory,
+                EntryType::Directory,
             ),
             Some(NodeId(0)),
         );
 
         let child2 = TreeNode::new(
             NodeId(2),
-            FsEntry::new(
+            DirEntry::new(
                 PathBuf::from("/dir1/dir2"),
                 "dir2".to_string(),
-                FsEntryType::Directory,
+                EntryType::Directory,
             ),
             Some(NodeId(1)),
         );

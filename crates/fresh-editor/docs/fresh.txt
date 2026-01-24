@@ -1,0 +1,93 @@
+
+[1m[92m███████╗██████╗ ███████╗███████╗██╗  ██╗
+[1m[92m██╔════╝██╔══██╗██╔════╝██╔════╝██║  ██║
+[1m[92m█████╗  ██████╔╝█████╗  ███████╗███████║
+[1m[92m██╔══╝  ██╔══██╗██╔══╝  ╚════██║██╔══██║
+[1m[92m██║     ██║  ██║███████╗███████║██║  ██║
+[1m[92m╚═╝     ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝[0m
+
+[1m[93mThe Terminal Text Editor[0m
+
+[1m[92mEasy To Use[0m | [1m[95mTypeScript Extensible[0m | [1m[94mLight And Fast[0m | [1m[93mHuge File Support[0m
+
+[1m[96m╔════════════════════════════════════════════════════════════╗[0m
+[1m[96m║[0m                    [1m[93mGETTING STARTED[0m                         [1m[96m║[0m
+[1m[96m╚════════════════════════════════════════════════════════════╝[0m
+
+[1m[92m🎯 Discover Everything[0m
+[2m────────────────────────────────────────────────────────────[0m
+  [36m•[0m [1mCommand Palette: [0m  Search and run any command by name
+  [36m•[0m [1mMenu Bar:[0m          Browse all features organized by category
+  [36m•[0m [1mMouse:[0m             Click menus, tabs, scrollbars - it all works
+  [36m•[0m [1mShow Keybindings:[0m  View all shortcuts for your platform
+
+[1m[95m📁 Working with Files[0m
+[2m────────────────────────────────────────────────────────────[0m
+  [36m•[0m [1mFile Explorer:[0m     Sidebar for browsing project files
+  [36m•[0m [1mTabs:[0m              Switch between open buffers
+  [36m•[0m [1mSplits:[0m            View multiple files side-by-side
+  [36m•[0m [1mGit Find File:[0m     Fuzzy search across git-tracked files
+
+[1m[94m✏️  Editing[0m
+[2m────────────────────────────────────────────────────────────[0m
+  [36m•[0m [1mMulti-cursor:[0m      Edit multiple places simultaneously
+  [36m•[0m [1mSearch & Replace:[0m  Find text with interactive replacement
+  [36m•[0m [1mUndo/Redo:[0m         Full edit history preserved
+  [36m•[0m [1mComments:[0m          Toggle line comments (language-aware)
+
+[1m[96m╔════════════════════════════════════════════════════════════╗[0m
+[1m[96m║[0m                  [1m[93mINTEGRATED TERMINAL[0m                       [1m[96m║[0m
+[1m[96m╚════════════════════════════════════════════════════════════╝[0m
+
+[1m[92m💻 Terminal Modes[0m  [2m(Command Palette → "Open Terminal")[0m
+[2m────────────────────────────────────────────────────────────[0m
+  The terminal has two modes, shown in the status bar:
+
+  [1mTerminal[0m               Keys go directly to the shell
+  [1mTerminal (read only)[0m   Scrollback mode - scroll and search output
+
+  [36m•[0m [1mToggle Mode:[0m       Switch between terminal and scrollback
+  [36m•[0m [1mKeyboard Capture:[0m  Send ALL keys to terminal (UI dims)
+                       - Use this when terminal apps need special keys
+
+[1m[96m╔════════════════════════════════════════════════════════════╗[0m
+[1m[96m║[0m                    [1m[93mLSP & CODE INTEL[0m                        [1m[96m║[0m
+[1m[96m╚════════════════════════════════════════════════════════════╝[0m
+
+[1m[95m🤖 Language Server Features[0m  [2m(requires LSP server installed)[0m
+[2m────────────────────────────────────────────────────────────[0m
+  [36m•[0m [1mGo to Definition:[0m  Jump to where a symbol is defined
+  [36m•[0m [1mFind References:[0m   See all usages of a symbol
+  [36m•[0m [1mHover:[0m             Mouse over symbols for documentation
+  [36m•[0m [1mCode Actions:[0m      Quick fixes and refactorings
+  [36m•[0m [1mRename Symbol:[0m     Rename across the entire project
+  [36m•[0m [1mDiagnostics:[0m       Errors and warnings shown inline
+
+  All LSP commands are available in the Command Palette.
+
+[1m[96m╔════════════════════════════════════════════════════════════╗[0m
+[1m[96m║[0m                    [1m[93mCONFIGURATION[0m                          [1m[96m║[0m
+[1m[96m╚════════════════════════════════════════════════════════════╝[0m
+
+[1m[94m⚙️  Settings[0m
+[2m────────────────────────────────────────────────────────────[0m
+  [36m•[0m [1mSettings UI:[0m       Visual editor for all options
+  [36m•[0m [1mUser config:[0m       [32m~/.config/fresh/config.json[0m
+  [36m•[0m [1mProject config:[0m    [32m.fresh/config.json[0m [2m(overrides user)[0m
+
+[1m[93m🔧 Adding LSP for a Language[0m
+[2m────────────────────────────────────────────────────────────[0m
+  Add to your config.json:
+  [2m{[0m
+  [2m  "lsp": {[0m
+  [2m    "mylang": { "command": "my-lsp-server", "enabled": true }[0m
+  [2m  }[0m
+  [2m}[0m
+
+[1m[37m📚 Learn More[0m
+[2m────────────────────────────────────────────────────────────[0m
+  [32mdocs/USER_GUIDE.md[0m          Comprehensive documentation
+  [32mdocs/PLUGIN_DEVELOPMENT.md[0m  Build your own plugins
+  [32mlocales/[0m                    Available languages (i18n)
+
+[2mPress [1mq[0m[2m or [1mEsc[0m[2m to close  |  Use [1mShow Keybindings[0m[2m command to see shortcuts[0m

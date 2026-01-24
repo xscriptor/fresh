@@ -17,9 +17,8 @@ fn test_slow_fs_harness_creation() {
     // Verify metrics are available
     assert!(harness.fs_metrics().is_some());
 
-    // Get metrics snapshot (this is async, so we need a runtime)
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let metrics = runtime.block_on(harness.get_fs_metrics_snapshot()).unwrap();
+    // Get metrics snapshot
+    let metrics = harness.fs_metrics().unwrap().clone();
     // Metrics should be initialized
     assert_eq!(metrics.total_calls(), metrics.total_calls());
 }
@@ -30,17 +29,15 @@ fn test_slow_fs_metrics_tracking() {
     let slow_config = SlowFsConfig::uniform(Duration::from_millis(50));
     let mut harness = EditorTestHarness::with_slow_fs(80, 24, slow_config).unwrap();
 
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-
     // Get initial metrics (should be zero or minimal)
-    let metrics_before = runtime.block_on(harness.get_fs_metrics_snapshot()).unwrap();
+    let metrics_before = harness.fs_metrics().unwrap().clone();
     let initial_calls = metrics_before.total_calls();
 
     // Perform an action that might trigger filesystem operations
     // For example, typing text shouldn't trigger many fs operations
     harness.type_text("hello world").unwrap();
 
-    let metrics_after = runtime.block_on(harness.get_fs_metrics_snapshot()).unwrap();
+    let metrics_after = harness.fs_metrics().unwrap().clone();
 
     // Typing text should not trigger filesystem operations
     // (unless there's autosave or similar features)
@@ -71,8 +68,7 @@ fn test_typing_remains_fast_with_slow_fs() {
     let mut harness = EditorTestHarness::with_slow_fs(80, 24, slow_config).unwrap();
 
     // Get filesystem call count before typing
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let metrics_before = runtime.block_on(harness.get_fs_metrics_snapshot()).unwrap();
+    let metrics_before = harness.fs_metrics().unwrap().clone();
     let calls_before = metrics_before.total_calls();
 
     // Type a moderate amount of text
@@ -80,7 +76,7 @@ fn test_typing_remains_fast_with_slow_fs() {
     harness.type_text(text).unwrap();
 
     // Verify no filesystem calls were made during typing
-    let metrics_after = runtime.block_on(harness.get_fs_metrics_snapshot()).unwrap();
+    let metrics_after = harness.fs_metrics().unwrap().clone();
     let calls_during_typing = metrics_after.total_calls() - calls_before;
 
     assert!(
@@ -130,10 +126,7 @@ fn test_navigation_with_slow_fs() {
     harness.type_text("line 1\nline 2\nline 3").unwrap();
 
     // Get filesystem call count before navigation
-    let metrics_before = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(harness.get_fs_metrics_snapshot())
-        .unwrap();
+    let metrics_before = harness.fs_metrics().unwrap();
     let calls_before = metrics_before.total_calls();
 
     // Navigate around (these operations should not touch filesystem)
@@ -147,10 +140,7 @@ fn test_navigation_with_slow_fs() {
     }
 
     // Verify no filesystem calls were made during navigation
-    let metrics_after = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(harness.get_fs_metrics_snapshot())
-        .unwrap();
+    let metrics_after = harness.fs_metrics().unwrap();
     let calls_during_navigation = metrics_after.total_calls() - calls_before;
 
     // Navigation should not trigger any filesystem operations
@@ -163,24 +153,24 @@ fn test_navigation_with_slow_fs() {
 
 #[test]
 fn test_metrics_provide_timing_info() {
-    // Verify that slow fs metrics track delay time correctly
-    let delay = Duration::from_millis(100);
+    // Verify that slow fs metrics track calls correctly
+    let delay = Duration::from_millis(10);
     let slow_config = SlowFsConfig::uniform(delay);
-    let harness = EditorTestHarness::with_slow_fs(80, 24, slow_config).unwrap();
+    let mut harness = EditorTestHarness::with_slow_fs(80, 24, slow_config).unwrap();
 
-    let metrics = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(harness.get_fs_metrics_snapshot())
-        .unwrap();
+    // Reset metrics to start fresh
+    harness.fs_metrics().unwrap().reset();
 
-    // The metrics should track total delay time
-    // (exact value depends on how many fs operations happened during editor init)
-    if metrics.total_calls() > 0 {
-        assert!(
-            metrics.total_delay_time > Duration::ZERO,
-            "Metrics should track delay time"
-        );
-    }
+    // Perform an operation that triggers filesystem access by opening a file
+    let _fixture = harness.load_buffer_from_text("test content").unwrap();
+
+    // The metrics should now track the file read operation
+    let total_calls = harness.fs_metrics().unwrap().total_calls();
+    assert!(
+        total_calls > 0,
+        "Metrics should track filesystem calls after opening file, got {}",
+        total_calls
+    );
 }
 
 #[test]
@@ -192,10 +182,8 @@ fn test_common_edit_flow_responsiveness() {
     let slow_config = SlowFsConfig::slow_disk();
     let mut harness = EditorTestHarness::with_slow_fs(80, 24, slow_config).unwrap();
 
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-
     // Get initial metrics to track filesystem operations
-    let initial_metrics = runtime.block_on(harness.get_fs_metrics_snapshot()).unwrap();
+    let initial_metrics = harness.fs_metrics().unwrap().clone();
 
     // === Phase 1: Create initial content ===
     let initial_content = "fn main() {\n    println!(\"Hello, world!\");\n}\n";
@@ -272,7 +260,7 @@ fn test_common_edit_flow_responsiveness() {
     harness.type_text("ment").unwrap();
 
     // === Verify no unnecessary filesystem operations ===
-    let final_metrics = runtime.block_on(harness.get_fs_metrics_snapshot()).unwrap();
+    let final_metrics = harness.fs_metrics().unwrap().clone();
     let fs_calls_during_edit = final_metrics.total_calls() - initial_metrics.total_calls();
 
     // Editing operations should not trigger filesystem access
@@ -305,8 +293,6 @@ fn test_buffer_switching_with_slow_fs() {
     let slow_config = SlowFsConfig::uniform(Duration::from_millis(100));
     let mut harness = EditorTestHarness::with_slow_fs(80, 24, slow_config).unwrap();
 
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-
     // Create first buffer with content
     harness.type_text("Buffer 1 content").unwrap();
 
@@ -319,7 +305,7 @@ fn test_buffer_switching_with_slow_fs() {
     harness.type_text("Buffer 3 content").unwrap();
 
     // Get filesystem call count before navigation
-    let metrics_before = runtime.block_on(harness.get_fs_metrics_snapshot()).unwrap();
+    let metrics_before = harness.fs_metrics().unwrap().clone();
     let calls_before = metrics_before.total_calls();
 
     // Navigate within buffer multiple times
@@ -331,7 +317,7 @@ fn test_buffer_switching_with_slow_fs() {
     }
 
     // Verify no filesystem calls were made during navigation
-    let metrics_after = runtime.block_on(harness.get_fs_metrics_snapshot()).unwrap();
+    let metrics_after = harness.fs_metrics().unwrap().clone();
     let calls_during_navigation = metrics_after.total_calls() - calls_before;
 
     assert!(

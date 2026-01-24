@@ -147,6 +147,12 @@ pub fn apply_event_with_hooks(
 
 #[cfg(test)]
 mod tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use super::*;
     use crate::services::plugins::hooks::HookRegistry;
     use fresh_core::CursorId;
@@ -203,8 +209,12 @@ mod tests {
         use crate::state::EditorState;
         use std::sync::RwLock;
 
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         let hook_registry = RwLock::new(HookRegistry::new());
 
         // Register a hook that cancels the operation
@@ -232,8 +242,12 @@ mod tests {
         use crate::state::EditorState;
         use std::sync::RwLock;
 
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         let hook_registry = RwLock::new(HookRegistry::new());
 
         // Register a hook that allows the operation

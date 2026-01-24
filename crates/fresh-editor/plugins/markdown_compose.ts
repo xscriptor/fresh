@@ -334,7 +334,7 @@ function disableMarkdownCompose(bufferId: number): void {
     editor.setLineNumbers(bufferId, true);
 
     // Clear view transform to return to normal rendering
-    editor.clearViewTransform(bufferId);
+    editor.clearViewTransform(bufferId, null);
 
     editor.refreshLines(bufferId);
     editor.debug(`Markdown compose disabled for buffer ${bufferId}`);
@@ -535,10 +535,10 @@ globalThis.onMarkdownViewTransform = function(data: {
     data.viewport_start
   );
 
-  // Submit the transformed tokens - keep compose_width for margins/centering
+  // Submit the transformed tokens - keep composeWidth for margins/centering
   const layoutHints: LayoutHints = {
-    compose_width: config.composeWidth,
-    column_guides: null,
+    composeWidth: config.composeWidth,
+    columnGuides: null,
   };
 
   editor.submitViewTransform(
@@ -611,4 +611,3 @@ editor.registerCommand(
 
 // Initialization
 editor.debug("Markdown Compose plugin loaded - use 'Markdown: Toggle Compose' command");
-editor.setStatus(editor.t("status.plugin_ready"));

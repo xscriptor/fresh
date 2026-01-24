@@ -58,16 +58,25 @@ impl Editor {
         let mut context = self.get_key_context();
 
         // Special case: Hover and Signature Help popups should be dismissed on any key press
+        // EXCEPT for Ctrl+C when the popup has a text selection (allow copy first)
         if matches!(context, crate::input::keybindings::KeyContext::Popup) {
             // Check if the current popup is transient (hover, signature help)
-            let is_transient_popup = self
-                .active_state()
-                .popups
-                .top()
-                .is_some_and(|p| p.transient);
+            let (is_transient_popup, has_selection) = {
+                let popup = self.active_state().popups.top();
+                (
+                    popup.is_some_and(|p| p.transient),
+                    popup.is_some_and(|p| p.has_selection()),
+                )
+            };
 
-            if is_transient_popup {
-                // Dismiss the popup on any key press
+            // Don't dismiss if popup has selection and user is pressing Ctrl+C (let them copy first)
+            let is_copy_key = key_event.code == crossterm::event::KeyCode::Char('c')
+                && key_event
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL);
+
+            if is_transient_popup && !(has_selection && is_copy_key) {
+                // Dismiss the popup on any key press (except Ctrl+C with selection)
                 self.hide_popup();
                 tracing::debug!("Dismissed transient popup on key press");
                 // Recalculate context now that popup is gone
@@ -219,6 +228,9 @@ impl Editor {
 
         match action {
             Action::Quit => self.quit(),
+            Action::ForceQuit => {
+                self.should_quit = true;
+            }
             Action::Save => {
                 // Check if buffer has a file path - if not, redirect to SaveAs
                 if self.active_state().buffer.file_path().is_none() {
@@ -319,6 +331,17 @@ impl Editor {
                 }
             }
             Action::Copy => {
+                // Check if there's an active popup with text selection
+                let state = self.active_state();
+                if let Some(popup) = state.popups.top() {
+                    if popup.has_selection() {
+                        if let Some(text) = popup.get_selected_text() {
+                            self.clipboard.copy(text);
+                            self.set_status_message(t!("clipboard.copied").to_string());
+                            return Ok(());
+                        }
+                    }
+                }
                 // Check if active buffer is a composite buffer
                 let buffer_id = self.active_buffer();
                 if self.is_composite_buffer(buffer_id) {
@@ -621,6 +644,9 @@ impl Editor {
             }
             Action::SetLineEnding => {
                 self.start_set_line_ending_prompt();
+            }
+            Action::SetLanguage => {
+                self.start_set_language_prompt();
             }
             Action::ToggleIndentationStyle => {
                 if let Some(state) = self.buffers.get_mut(&self.active_buffer()) {
@@ -1934,9 +1960,77 @@ impl Editor {
         }
     }
 
+    /// Start the language selection prompt
+    fn start_set_language_prompt(&mut self) {
+        let current_language = self.active_state().language.clone();
+
+        // Build suggestions from all available syntect syntaxes + Plain Text option
+        let mut suggestions: Vec<crate::input::commands::Suggestion> = vec![
+            // Plain Text option (no syntax highlighting)
+            crate::input::commands::Suggestion {
+                text: "Plain Text".to_string(),
+                description: if current_language == "Plain Text" || current_language == "text" {
+                    Some("current".to_string())
+                } else {
+                    None
+                },
+                value: Some("Plain Text".to_string()),
+                disabled: false,
+                keybinding: None,
+                source: None,
+            },
+        ];
+
+        // Add all available syntaxes from the grammar registry (100+ languages)
+        let mut syntax_names: Vec<&str> = self.grammar_registry.available_syntaxes();
+        // Sort alphabetically for easier navigation
+        syntax_names.sort_unstable_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
+        for syntax_name in syntax_names {
+            // Skip "Plain Text" as we already added it at the top
+            if syntax_name == "Plain Text" {
+                continue;
+            }
+            let is_current = syntax_name == current_language;
+            suggestions.push(crate::input::commands::Suggestion {
+                text: syntax_name.to_string(),
+                description: if is_current {
+                    Some("current".to_string())
+                } else {
+                    None
+                },
+                value: Some(syntax_name.to_string()),
+                disabled: false,
+                keybinding: None,
+                source: None,
+            });
+        }
+
+        // Find current language index
+        let current_index = suggestions
+            .iter()
+            .position(|s| s.value.as_deref() == Some(&current_language))
+            .unwrap_or(0);
+
+        self.prompt = Some(crate::view::prompt::Prompt::with_suggestions(
+            "Language: ".to_string(),
+            PromptType::SetLanguage,
+            suggestions,
+        ));
+
+        if let Some(prompt) = self.prompt.as_mut() {
+            if !prompt.suggestions.is_empty() {
+                prompt.selected_suggestion = Some(current_index);
+                // Don't set input - keep it empty so typing filters the list
+                // The selected suggestion shows the current language
+            }
+        }
+    }
+
     /// Start the theme selection prompt with available themes
     fn start_select_theme_prompt(&mut self) {
-        let available_themes = crate::view::theme::Theme::available_themes();
+        let theme_loader = crate::view::theme::LocalThemeLoader::new();
+        let available_themes = crate::view::theme::Theme::all_available(&theme_loader);
         let current_theme_name = &self.theme.name;
 
         // Find the index of the current theme
@@ -1985,7 +2079,8 @@ impl Editor {
     /// Apply a theme by name and persist it to config
     pub(super) fn apply_theme(&mut self, theme_name: &str) {
         if !theme_name.is_empty() {
-            if let Some(theme) = crate::view::theme::Theme::from_name(theme_name) {
+            let theme_loader = crate::view::theme::LocalThemeLoader::new();
+            if let Some(theme) = crate::view::theme::Theme::load(theme_name, &theme_loader) {
                 self.theme = theme;
 
                 // Set terminal cursor color to match theme
@@ -2010,7 +2105,8 @@ impl Editor {
     /// Used for live preview when navigating theme selection
     pub(super) fn preview_theme(&mut self, theme_name: &str) {
         if !theme_name.is_empty() && theme_name != self.theme.name {
-            if let Some(theme) = crate::view::theme::Theme::from_name(theme_name) {
+            let theme_loader = crate::view::theme::LocalThemeLoader::new();
+            if let Some(theme) = crate::view::theme::Theme::load(theme_name, &theme_loader) {
                 self.theme = theme;
                 self.theme.set_terminal_cursor_color();
             }
@@ -2020,7 +2116,7 @@ impl Editor {
     /// Save the current theme setting to the user's config file
     fn save_theme_to_config(&mut self) {
         // Create the directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(&self.dir_context.config_dir) {
+        if let Err(e) = self.filesystem.create_dir_all(&self.dir_context.config_dir) {
             tracing::warn!("Failed to create config directory: {}", e);
             return;
         }
@@ -2125,7 +2221,7 @@ impl Editor {
     /// Save the current keybinding map setting to the user's config file
     fn save_keybinding_map_to_config(&mut self) {
         // Create the directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(&self.dir_context.config_dir) {
+        if let Err(e) = self.filesystem.create_dir_all(&self.dir_context.config_dir) {
             tracing::warn!("Failed to create config directory: {}", e);
             return;
         }
@@ -2217,7 +2313,7 @@ impl Editor {
     /// Save the current cursor style setting to the user's config file
     fn save_cursor_style_to_config(&mut self) {
         // Create the directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(&self.dir_context.config_dir) {
+        if let Err(e) = self.filesystem.create_dir_all(&self.dir_context.config_dir) {
             tracing::warn!("Failed to create config directory: {}", e);
             return;
         }
@@ -2328,7 +2424,7 @@ impl Editor {
     /// Save the current locale setting to the user's config file
     fn save_locale_to_config(&mut self) {
         // Create the directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(&self.dir_context.config_dir) {
+        if let Err(e) = self.filesystem.create_dir_all(&self.dir_context.config_dir) {
             tracing::warn!("Failed to create config directory: {}", e);
             return;
         }

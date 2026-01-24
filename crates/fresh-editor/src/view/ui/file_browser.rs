@@ -535,8 +535,7 @@ impl FileBrowserRenderer {
                     .fs_entry
                     .metadata
                     .as_ref()
-                    .and_then(|m| m.size)
-                    .map(format_size)
+                    .map(|m| format_size(m.size))
                     .unwrap_or_else(|| "--".to_string());
                 format!("{:>width$}", size, width = size_col_width)
             };

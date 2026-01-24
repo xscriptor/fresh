@@ -284,6 +284,34 @@ impl JsonSchema for LineEndingOption {
     }
 }
 
+/// Controls whether Enter accepts a completion suggestion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AcceptSuggestionOnEnter {
+    /// Enter always accepts the completion
+    #[default]
+    On,
+    /// Enter inserts a newline (use Tab to accept)
+    Off,
+    /// Enter accepts only if the completion differs from typed text
+    Smart,
+}
+
+impl JsonSchema for AcceptSuggestionOnEnter {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("AcceptSuggestionOnEnter")
+    }
+
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Controls whether Enter accepts a completion suggestion",
+            "type": "string",
+            "enum": ["on", "off", "smart"],
+            "default": "on"
+        })
+    }
+}
+
 impl PartialEq<KeybindingMapName> for str {
     fn eq(&self, other: &KeybindingMapName) -> bool {
         self == other.0
@@ -392,71 +420,157 @@ fn default_theme_name() -> ThemeName {
 /// Editor behavior configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EditorConfig {
-    /// Number of spaces per tab character
-    #[serde(default = "default_tab_size")]
-    pub tab_size: usize,
-
-    /// Automatically indent new lines based on the previous line
-    #[serde(default = "default_true")]
-    pub auto_indent: bool,
-
+    // ===== Display =====
     /// Show line numbers in the gutter (default for new buffers)
     #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Display"))]
     pub line_numbers: bool,
 
     /// Show line numbers relative to cursor position
     #[serde(default = "default_false")]
+    #[schemars(extend("x-section" = "Display"))]
     pub relative_line_numbers: bool,
-
-    /// Minimum lines to keep visible above/below cursor when scrolling
-    #[serde(default = "default_scroll_offset")]
-    pub scroll_offset: usize,
-
-    /// Enable syntax highlighting for code files
-    #[serde(default = "default_true")]
-    pub syntax_highlighting: bool,
 
     /// Wrap long lines to fit the window width (default for new views)
     #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Display"))]
     pub line_wrap: bool,
 
-    /// Maximum time in milliseconds for syntax highlighting per frame
-    #[serde(default = "default_highlight_timeout")]
-    pub highlight_timeout_ms: u64,
+    /// Enable syntax highlighting for code files
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Display"))]
+    pub syntax_highlighting: bool,
 
-    /// Undo history snapshot interval (number of edits between snapshots)
-    #[serde(default = "default_snapshot_interval")]
-    pub snapshot_interval: usize,
+    /// Whether the menu bar is visible by default.
+    /// The menu bar provides access to menus (File, Edit, View, etc.) at the top of the screen.
+    /// Can be toggled at runtime via command palette or keybinding.
+    /// Default: true
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Display"))]
+    pub show_menu_bar: bool,
 
-    /// File size threshold in bytes for "large file" behavior
-    /// Files larger than this will:
-    /// - Skip LSP features
-    /// - Use constant-size scrollbar thumb (1 char)
-    ///
-    /// Files smaller will count actual lines for accurate scrollbar rendering
-    #[serde(default = "default_large_file_threshold")]
-    pub large_file_threshold_bytes: u64,
+    /// Whether the tab bar is visible by default.
+    /// The tab bar shows open files in each split pane.
+    /// Can be toggled at runtime via command palette or keybinding.
+    /// Default: true
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Display"))]
+    pub show_tab_bar: bool,
 
-    /// Estimated average line length in bytes (used for large file line estimation)
-    /// This is used by LineIterator to estimate line positions in large files
-    /// without line metadata. Typical values: 80-120 bytes.
-    #[serde(default = "default_estimated_line_length")]
-    pub estimated_line_length: usize,
+    /// Use the terminal's default background color instead of the theme's editor background.
+    /// When enabled, the editor background inherits from the terminal emulator,
+    /// allowing transparency or custom terminal backgrounds to show through.
+    /// Default: false
+    #[serde(default = "default_false")]
+    #[schemars(extend("x-section" = "Display"))]
+    pub use_terminal_bg: bool,
 
+    /// Cursor style for the terminal cursor.
+    /// Options: blinking_block, steady_block, blinking_bar, steady_bar, blinking_underline, steady_underline
+    /// Default: blinking_block
+    #[serde(default)]
+    #[schemars(extend("x-section" = "Display"))]
+    pub cursor_style: CursorStyle,
+
+    // ===== Editing =====
+    /// Number of spaces per tab character
+    #[serde(default = "default_tab_size")]
+    #[schemars(extend("x-section" = "Editing"))]
+    pub tab_size: usize,
+
+    /// Automatically indent new lines based on the previous line
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Editing"))]
+    pub auto_indent: bool,
+
+    /// Minimum lines to keep visible above/below cursor when scrolling
+    #[serde(default = "default_scroll_offset")]
+    #[schemars(extend("x-section" = "Editing"))]
+    pub scroll_offset: usize,
+
+    /// Default line ending format for new files.
+    /// Files loaded from disk will use their detected line ending format.
+    /// Options: "lf" (Unix/Linux/macOS), "crlf" (Windows), "cr" (Classic Mac)
+    /// Default: "lf"
+    #[serde(default)]
+    #[schemars(extend("x-section" = "Editing"))]
+    pub default_line_ending: LineEndingOption,
+
+    // ===== Completion =====
+    /// Enable quick suggestions (VS Code-like behavior).
+    /// When enabled, completion suggestions appear automatically while typing,
+    /// not just on trigger characters (like `.` or `::`).
+    /// Default: true
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Completion"))]
+    pub quick_suggestions: bool,
+
+    /// Delay in milliseconds before showing completion suggestions.
+    /// Lower values (10-50ms) feel more responsive but may be distracting.
+    /// Higher values (100-500ms) reduce noise while typing.
+    /// Trigger characters (like `.`) bypass this delay.
+    /// Default: 10 (matches VS Code)
+    #[serde(default = "default_quick_suggestions_delay")]
+    #[schemars(extend("x-section" = "Completion"))]
+    pub quick_suggestions_delay_ms: u64,
+
+    /// Whether trigger characters (like `.`, `::`, `->`) immediately show completions.
+    /// When true, typing a trigger character bypasses quick_suggestions_delay_ms.
+    /// Default: true
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Completion"))]
+    pub suggest_on_trigger_characters: bool,
+
+    /// Controls whether pressing Enter accepts the selected completion.
+    /// - "on": Enter always accepts the completion
+    /// - "off": Enter inserts a newline (use Tab to accept)
+    /// - "smart": Enter accepts only if the completion text differs from typed text
+    /// Default: "on"
+    #[serde(default = "default_accept_suggestion_on_enter")]
+    #[schemars(extend("x-section" = "Completion"))]
+    pub accept_suggestion_on_enter: AcceptSuggestionOnEnter,
+
+    // ===== LSP =====
     /// Whether to enable LSP inlay hints (type hints, parameter hints, etc.)
     #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "LSP"))]
     pub enable_inlay_hints: bool,
 
     /// Whether to request full-document LSP semantic tokens.
     /// Range requests are still used when supported.
     /// Default: false (range-only to avoid heavy full refreshes).
     #[serde(default = "default_false")]
+    #[schemars(extend("x-section" = "LSP"))]
     pub enable_semantic_tokens_full: bool,
 
+    // ===== Mouse =====
+    /// Whether mouse hover triggers LSP hover requests.
+    /// When enabled, hovering over code with the mouse will show documentation.
+    /// Default: true
+    #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Mouse"))]
+    pub mouse_hover_enabled: bool,
+
+    /// Delay in milliseconds before a mouse hover triggers an LSP hover request.
+    /// Lower values show hover info faster but may cause more LSP server load.
+    /// Default: 500ms
+    #[serde(default = "default_mouse_hover_delay")]
+    #[schemars(extend("x-section" = "Mouse"))]
+    pub mouse_hover_delay_ms: u64,
+
+    /// Time window in milliseconds for detecting double-clicks.
+    /// Two clicks within this time are treated as a double-click (word selection).
+    /// Default: 500ms
+    #[serde(default = "default_double_click_time")]
+    #[schemars(extend("x-section" = "Mouse"))]
+    pub double_click_time_ms: u64,
+
+    // ===== Recovery =====
     /// Whether to enable file recovery (Emacs-style auto-save)
     /// When enabled, buffers are periodically saved to recovery files
     /// so they can be recovered if the editor crashes.
     #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Recovery"))]
     pub recovery_enabled: bool,
 
     /// Auto-save interval in seconds for file recovery
@@ -464,65 +578,24 @@ pub struct EditorConfig {
     /// Default: 2 seconds for fast recovery with minimal data loss.
     /// Set to 0 to disable periodic auto-save (manual recovery only).
     #[serde(default = "default_auto_save_interval")]
+    #[schemars(extend("x-section" = "Recovery"))]
     pub auto_save_interval_secs: u32,
-
-    /// Number of bytes to look back/forward from the viewport for syntax highlighting context.
-    /// Larger values improve accuracy for multi-line constructs (strings, comments, nested blocks)
-    /// but may slow down highlighting for very large files.
-    /// Default: 10KB (10000 bytes)
-    #[serde(default = "default_highlight_context_bytes")]
-    pub highlight_context_bytes: usize,
-
-    /// Whether mouse hover triggers LSP hover requests.
-    /// When enabled, hovering over code with the mouse will show documentation.
-    /// Default: true
-    #[serde(default = "default_true")]
-    pub mouse_hover_enabled: bool,
-
-    /// Delay in milliseconds before a mouse hover triggers an LSP hover request.
-    /// Lower values show hover info faster but may cause more LSP server load.
-    /// Default: 500ms
-    #[serde(default = "default_mouse_hover_delay")]
-    pub mouse_hover_delay_ms: u64,
-
-    /// Time window in milliseconds for detecting double-clicks.
-    /// Two clicks within this time are treated as a double-click (word selection).
-    /// Default: 500ms
-    #[serde(default = "default_double_click_time")]
-    pub double_click_time_ms: u64,
 
     /// Poll interval in milliseconds for auto-reverting open buffers.
     /// When auto-revert is enabled, file modification times are checked at this interval.
     /// Lower values detect external changes faster but use more CPU.
     /// Default: 2000ms (2 seconds)
     #[serde(default = "default_auto_revert_poll_interval")]
+    #[schemars(extend("x-section" = "Recovery"))]
     pub auto_revert_poll_interval_ms: u64,
 
-    /// Poll interval in milliseconds for refreshing expanded directories in the file explorer.
-    /// Directory modification times are checked at this interval to detect new/deleted files.
-    /// Lower values detect changes faster but use more CPU.
-    /// Default: 3000ms (3 seconds)
-    #[serde(default = "default_file_tree_poll_interval")]
-    pub file_tree_poll_interval_ms: u64,
-
-    /// Default line ending format for new files.
-    /// Files loaded from disk will use their detected line ending format.
-    /// Options: "lf" (Unix/Linux/macOS), "crlf" (Windows), "cr" (Classic Mac)
-    /// Default: "lf"
-    #[serde(default)]
-    pub default_line_ending: LineEndingOption,
-
-    /// Cursor style for the terminal cursor.
-    /// Options: blinking_block, steady_block, blinking_bar, steady_bar, blinking_underline, steady_underline
-    /// Default: blinking_block
-    #[serde(default)]
-    pub cursor_style: CursorStyle,
-
+    // ===== Keyboard =====
     /// Enable keyboard enhancement: disambiguate escape codes using CSI-u sequences.
     /// This allows unambiguous reading of Escape and modified keys.
     /// Requires terminal support (kitty keyboard protocol).
     /// Default: true
     #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Keyboard"))]
     pub keyboard_disambiguate_escape_codes: bool,
 
     /// Enable keyboard enhancement: report key event types (repeat/release).
@@ -530,6 +603,7 @@ pub struct EditorConfig {
     /// Requires terminal support (kitty keyboard protocol).
     /// Default: false
     #[serde(default = "default_false")]
+    #[schemars(extend("x-section" = "Keyboard"))]
     pub keyboard_report_event_types: bool,
 
     /// Enable keyboard enhancement: report alternate keycodes.
@@ -537,6 +611,7 @@ pub struct EditorConfig {
     /// Requires terminal support (kitty keyboard protocol).
     /// Default: true
     #[serde(default = "default_true")]
+    #[schemars(extend("x-section" = "Keyboard"))]
     pub keyboard_report_alternate_keys: bool,
 
     /// Enable keyboard enhancement: report all keys as escape codes.
@@ -545,28 +620,52 @@ pub struct EditorConfig {
     /// Requires terminal support (kitty keyboard protocol).
     /// Default: false
     #[serde(default = "default_false")]
+    #[schemars(extend("x-section" = "Keyboard"))]
     pub keyboard_report_all_keys_as_escape_codes: bool,
 
-    /// Enable quick suggestions (VS Code-like behavior).
-    /// When enabled, completion suggestions appear automatically while typing,
-    /// not just on trigger characters (like `.` or `::`).
-    /// Default: true
-    #[serde(default = "default_true")]
-    pub quick_suggestions: bool,
+    // ===== Performance =====
+    /// Maximum time in milliseconds for syntax highlighting per frame
+    #[serde(default = "default_highlight_timeout")]
+    #[schemars(extend("x-section" = "Performance"))]
+    pub highlight_timeout_ms: u64,
 
-    /// Whether the menu bar is visible by default.
-    /// The menu bar provides access to menus (File, Edit, View, etc.) at the top of the screen.
-    /// Can be toggled at runtime via command palette or keybinding.
-    /// Default: true
-    #[serde(default = "default_true")]
-    pub show_menu_bar: bool,
+    /// Undo history snapshot interval (number of edits between snapshots)
+    #[serde(default = "default_snapshot_interval")]
+    #[schemars(extend("x-section" = "Performance"))]
+    pub snapshot_interval: usize,
 
-    /// Whether the tab bar is visible by default.
-    /// The tab bar shows open files in each split pane.
-    /// Can be toggled at runtime via command palette or keybinding.
-    /// Default: true
-    #[serde(default = "default_true")]
-    pub show_tab_bar: bool,
+    /// Number of bytes to look back/forward from the viewport for syntax highlighting context.
+    /// Larger values improve accuracy for multi-line constructs (strings, comments, nested blocks)
+    /// but may slow down highlighting for very large files.
+    /// Default: 10KB (10000 bytes)
+    #[serde(default = "default_highlight_context_bytes")]
+    #[schemars(extend("x-section" = "Performance"))]
+    pub highlight_context_bytes: usize,
+
+    /// File size threshold in bytes for "large file" behavior
+    /// Files larger than this will:
+    /// - Skip LSP features
+    /// - Use constant-size scrollbar thumb (1 char)
+    ///
+    /// Files smaller will count actual lines for accurate scrollbar rendering
+    #[serde(default = "default_large_file_threshold")]
+    #[schemars(extend("x-section" = "Performance"))]
+    pub large_file_threshold_bytes: u64,
+
+    /// Estimated average line length in bytes (used for large file line estimation)
+    /// This is used by LineIterator to estimate line positions in large files
+    /// without line metadata. Typical values: 80-120 bytes.
+    #[serde(default = "default_estimated_line_length")]
+    #[schemars(extend("x-section" = "Performance"))]
+    pub estimated_line_length: usize,
+
+    /// Poll interval in milliseconds for refreshing expanded directories in the file explorer.
+    /// Directory modification times are checked at this interval to detect new/deleted files.
+    /// Lower values detect changes faster but use more CPU.
+    /// Default: 3000ms (3 seconds)
+    #[serde(default = "default_file_tree_poll_interval")]
+    #[schemars(extend("x-section" = "Performance"))]
+    pub file_tree_poll_interval_ms: u64,
 }
 
 fn default_tab_size() -> usize {
@@ -588,6 +687,14 @@ fn default_true() -> bool {
 
 fn default_false() -> bool {
     false
+}
+
+fn default_quick_suggestions_delay() -> u64 {
+    10 // 10ms like VS Code
+}
+
+fn default_accept_suggestion_on_enter() -> AcceptSuggestionOnEnter {
+    AcceptSuggestionOnEnter::On
 }
 
 fn default_scroll_offset() -> usize {
@@ -661,8 +768,12 @@ impl Default for EditorConfig {
             keyboard_report_alternate_keys: true,
             keyboard_report_all_keys_as_escape_codes: false,
             quick_suggestions: true,
+            quick_suggestions_delay_ms: default_quick_suggestions_delay(),
+            suggest_on_trigger_characters: true,
+            accept_suggestion_on_enter: default_accept_suggestion_on_enter(),
             show_menu_bar: true,
             show_tab_bar: true,
+            use_terminal_bg: false,
         }
     }
 }
@@ -1114,7 +1225,8 @@ pub fn generate_dynamic_items(source: &str) -> Vec<MenuItem> {
     match source {
         "copy_with_theme" => {
             // Generate theme options from available themes
-            crate::view::theme::Theme::available_themes()
+            let theme_loader = crate::view::theme::LocalThemeLoader::new();
+            crate::view::theme::Theme::all_available(&theme_loader)
                 .into_iter()
                 .map(|theme_name| {
                     let mut args = HashMap::new();
@@ -2308,6 +2420,195 @@ impl Config {
             },
         );
 
+        languages.insert(
+            "zig".to_string(),
+            LanguageConfig {
+                extensions: vec!["zig".to_string(), "zon".to_string()],
+                filenames: vec![],
+                grammar: "zig".to_string(),
+                comment_prefix: Some("//".to_string()),
+                auto_indent: true,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: true,
+                use_tabs: false,
+                tab_size: None,
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
+        languages.insert(
+            "java".to_string(),
+            LanguageConfig {
+                extensions: vec!["java".to_string()],
+                filenames: vec![],
+                grammar: "java".to_string(),
+                comment_prefix: Some("//".to_string()),
+                auto_indent: true,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: true,
+                use_tabs: false,
+                tab_size: None,
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
+        languages.insert(
+            "latex".to_string(),
+            LanguageConfig {
+                extensions: vec![
+                    "tex".to_string(),
+                    "latex".to_string(),
+                    "ltx".to_string(),
+                    "sty".to_string(),
+                    "cls".to_string(),
+                    "bib".to_string(),
+                ],
+                filenames: vec![],
+                grammar: "latex".to_string(),
+                comment_prefix: Some("%".to_string()),
+                auto_indent: true,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: true,
+                use_tabs: false,
+                tab_size: None,
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
+        languages.insert(
+            "templ".to_string(),
+            LanguageConfig {
+                extensions: vec!["templ".to_string()],
+                filenames: vec![],
+                grammar: "go".to_string(), // Templ uses Go-like syntax
+                comment_prefix: Some("//".to_string()),
+                auto_indent: true,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: true,
+                use_tabs: false,
+                tab_size: None,
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
+        // Git-related file types
+        languages.insert(
+            "git-rebase".to_string(),
+            LanguageConfig {
+                extensions: vec![],
+                filenames: vec!["git-rebase-todo".to_string()],
+                grammar: "Git Rebase Todo".to_string(),
+                comment_prefix: Some("#".to_string()),
+                auto_indent: false,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: true,
+                use_tabs: false,
+                tab_size: None,
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
+        languages.insert(
+            "git-commit".to_string(),
+            LanguageConfig {
+                extensions: vec![],
+                filenames: vec![
+                    "COMMIT_EDITMSG".to_string(),
+                    "MERGE_MSG".to_string(),
+                    "SQUASH_MSG".to_string(),
+                    "TAG_EDITMSG".to_string(),
+                ],
+                grammar: "Git Commit Message".to_string(),
+                comment_prefix: Some("#".to_string()),
+                auto_indent: false,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: true,
+                use_tabs: false,
+                tab_size: None,
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
+        languages.insert(
+            "gitignore".to_string(),
+            LanguageConfig {
+                extensions: vec!["gitignore".to_string()],
+                filenames: vec![
+                    ".gitignore".to_string(),
+                    ".dockerignore".to_string(),
+                    ".npmignore".to_string(),
+                    ".hgignore".to_string(),
+                ],
+                grammar: "Gitignore".to_string(),
+                comment_prefix: Some("#".to_string()),
+                auto_indent: false,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: true,
+                use_tabs: false,
+                tab_size: None,
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
+        languages.insert(
+            "gitconfig".to_string(),
+            LanguageConfig {
+                extensions: vec!["gitconfig".to_string()],
+                filenames: vec![".gitconfig".to_string(), ".gitmodules".to_string()],
+                grammar: "Git Config".to_string(),
+                comment_prefix: Some("#".to_string()),
+                auto_indent: true,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: true,
+                use_tabs: false,
+                tab_size: None,
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
+        languages.insert(
+            "gitattributes".to_string(),
+            LanguageConfig {
+                extensions: vec!["gitattributes".to_string()],
+                filenames: vec![".gitattributes".to_string()],
+                grammar: "Git Attributes".to_string(),
+                comment_prefix: Some("#".to_string()),
+                auto_indent: false,
+                highlighter: HighlighterPreference::Auto,
+                textmate_grammar: None,
+                show_whitespace_tabs: true,
+                use_tabs: false,
+                tab_size: None,
+                formatter: None,
+                format_on_save: false,
+                on_save: vec![],
+            },
+        );
+
         languages
     }
 
@@ -2475,6 +2776,76 @@ impl Config {
             LspServerConfig {
                 command: "ols".to_string(),
                 args: vec![],
+                enabled: true,
+                auto_start: false,
+                process_limits: ProcessLimits::default(),
+                initialization_options: None,
+            },
+        );
+
+        // zls - Zig Language Server (https://github.com/zigtools/zls)
+        // Install via package manager or download from releases
+        lsp.insert(
+            "zig".to_string(),
+            LspServerConfig {
+                command: "zls".to_string(),
+                args: vec![],
+                enabled: true,
+                auto_start: false,
+                process_limits: ProcessLimits::default(),
+                initialization_options: None,
+            },
+        );
+
+        // jdtls - Eclipse JDT Language Server for Java
+        // Install via package manager or download from Eclipse
+        lsp.insert(
+            "java".to_string(),
+            LspServerConfig {
+                command: "jdtls".to_string(),
+                args: vec![],
+                enabled: true,
+                auto_start: false,
+                process_limits: ProcessLimits::default(),
+                initialization_options: None,
+            },
+        );
+
+        // texlab - LaTeX Language Server (https://github.com/latex-lsp/texlab)
+        // Install via cargo install texlab or package manager
+        lsp.insert(
+            "latex".to_string(),
+            LspServerConfig {
+                command: "texlab".to_string(),
+                args: vec![],
+                enabled: true,
+                auto_start: false,
+                process_limits: ProcessLimits::default(),
+                initialization_options: None,
+            },
+        );
+
+        // marksman - Markdown Language Server (https://github.com/artempyanykh/marksman)
+        // Install via package manager or download from releases
+        lsp.insert(
+            "markdown".to_string(),
+            LspServerConfig {
+                command: "marksman".to_string(),
+                args: vec!["server".to_string()],
+                enabled: true,
+                auto_start: false,
+                process_limits: ProcessLimits::default(),
+                initialization_options: None,
+            },
+        );
+
+        // templ - Templ Language Server (https://templ.guide)
+        // Install via go install github.com/a-h/templ/cmd/templ@latest
+        lsp.insert(
+            "templ".to_string(),
+            LspServerConfig {
+                command: "templ".to_string(),
+                args: vec!["lsp".to_string()],
                 enabled: true,
                 auto_start: false,
                 process_limits: ProcessLimits::default(),
@@ -2714,7 +3085,8 @@ mod tests {
             MenuItem::Submenu { label, items } => {
                 assert_eq!(label, "Test");
                 // Should have items for each available theme
-                let themes = crate::view::theme::Theme::available_themes();
+                let theme_loader = crate::view::theme::LocalThemeLoader::new();
+                let themes = crate::view::theme::Theme::all_available(&theme_loader);
                 assert_eq!(items.len(), themes.len());
 
                 // Each item should be an Action with copy_with_theme

@@ -551,7 +551,7 @@ async function renderReviewStream(): Promise<{ entries: TextPropertyEntry[], hig
  * Updates the buffer UI (text and highlights) based on current state.hunks
  */
 async function updateReviewUI() {
-  if (state.reviewBufferId !== null) {
+  if (state.reviewBufferId != null) {
     const { entries, highlights } = await renderReviewStream();
     editor.setVirtualBufferContent(state.reviewBufferId, entries);
     
@@ -677,12 +677,12 @@ globalThis.on_viewport_changed = (data: any) => {
 
     const { oldSplitId, newSplitId, oldLineByteOffsets, newLineByteOffsets } = activeSideBySideState;
 
-    if (data.split_id === oldSplitId && newLineByteOffsets.length > 0) {
+    if (data.splitId === oldSplitId && newLineByteOffsets.length > 0) {
         // OLD pane scrolled - find which line it's on and sync NEW pane to same line
         const lineNum = findLineForByte(oldLineByteOffsets, data.top_byte);
         const targetByte = newLineByteOffsets[Math.min(lineNum, newLineByteOffsets.length - 1)];
         (editor as any).setSplitScroll(newSplitId, targetByte);
-    } else if (data.split_id === newSplitId && oldLineByteOffsets.length > 0) {
+    } else if (data.splitId === newSplitId && oldLineByteOffsets.length > 0) {
         // NEW pane scrolled - find which line it's on and sync OLD pane to same line
         const lineNum = findLineForByte(newLineByteOffsets, data.top_byte);
         const targetByte = oldLineByteOffsets[Math.min(lineNum, oldLineByteOffsets.length - 1)];
@@ -1100,7 +1100,7 @@ globalThis.review_drill_down = async () => {
         }));
 
         // Create source buffers (hidden from tabs, used by composite)
-        const oldBufferId = await editor.createVirtualBuffer({
+        const oldResult = await editor.createVirtualBuffer({
             name: `*OLD:${h.file}*`,
             mode: "normal",
             readOnly: true,
@@ -1109,8 +1109,9 @@ globalThis.review_drill_down = async () => {
             editingDisabled: true,
             hiddenFromTabs: true
         });
+        const oldBufferId = oldResult.bufferId;
 
-        const newBufferId = await editor.createVirtualBuffer({
+        const newResult = await editor.createVirtualBuffer({
             name: `*NEW:${h.file}*`,
             mode: "normal",
             readOnly: true,
@@ -1119,6 +1120,7 @@ globalThis.review_drill_down = async () => {
             editingDisabled: true,
             hiddenFromTabs: true
         });
+        const newBufferId = newResult.bufferId;
 
         // Convert hunks to composite buffer format (parse counts from git diff)
         const compositeHunks: TsCompositeHunk[] = fileHunks.map(fh => {
@@ -1130,10 +1132,10 @@ globalThis.review_drill_down = async () => {
                 else if (line.startsWith(' ')) { oldCount++; newCount++; }
             }
             return {
-                old_start: fh.oldRange.start - 1,  // Convert to 0-indexed
-                old_count: oldCount || 1,
-                new_start: fh.range.start - 1,     // Convert to 0-indexed
-                new_count: newCount || 1
+                oldStart: fh.oldRange.start - 1,  // Convert to 0-indexed
+                oldCount: oldCount || 1,
+                newStart: fh.range.start - 1,     // Convert to 0-indexed
+                newCount: newCount || 1
             };
         });
 
@@ -1142,27 +1144,27 @@ globalThis.review_drill_down = async () => {
             name: `*Diff: ${h.file}*`,
             mode: "diff-view",
             layout: {
-                layout_type: "side-by-side",
+                type: "side-by-side",
                 ratios: [0.5, 0.5],
-                show_separator: true
+                showSeparator: true
             },
             sources: [
                 {
-                    buffer_id: oldBufferId,
+                    bufferId: oldBufferId,
                     label: "OLD (HEAD)",
                     editable: false,
                     style: {
-                        remove_bg: [80, 40, 40],
-                        gutter_style: "diff-markers"
+                        removeBg: [80, 40, 40],
+                        gutterStyle: "diff-markers"
                     }
                 },
                 {
-                    buffer_id: newBufferId,
+                    bufferId: newBufferId,
                     label: "NEW (Working)",
                     editable: false,
                     style: {
-                        add_bg: [40, 80, 40],
-                        gutter_style: "diff-markers"
+                        addBg: [40, 80, 40],
+                        gutterStyle: "diff-markers"
                     }
                 }
             ],
@@ -1518,7 +1520,7 @@ globalThis.on_review_buffer_activated = (data: any) => {
 };
 
 globalThis.on_review_buffer_closed = (data: any) => {
-    if (data.buffer_id === state.reviewBufferId) stop_review_diff();
+    if (data.buffer_id === state.reviewBufferId) globalThis.stop_review_diff();
 };
 
 // Side-by-side diff for current file using composite buffers
@@ -1663,7 +1665,7 @@ globalThis.side_by_side_diff_current_file = async () => {
     }));
 
     // Create source buffers (hidden from tabs, used by composite)
-    const oldBufferId = await editor.createVirtualBuffer({
+    const oldResult = await editor.createVirtualBuffer({
         name: `*OLD:${filePath}*`,
         mode: "normal",
         readOnly: true,
@@ -1672,8 +1674,9 @@ globalThis.side_by_side_diff_current_file = async () => {
         editingDisabled: true,
         hiddenFromTabs: true
     });
+    const oldBufferId = oldResult.bufferId;
 
-    const newBufferId = await editor.createVirtualBuffer({
+    const newResult = await editor.createVirtualBuffer({
         name: `*NEW:${filePath}*`,
         mode: "normal",
         readOnly: true,
@@ -1682,13 +1685,14 @@ globalThis.side_by_side_diff_current_file = async () => {
         editingDisabled: true,
         hiddenFromTabs: true
     });
+    const newBufferId = newResult.bufferId;
 
     // Convert hunks to composite buffer format
     const compositeHunks: TsCompositeHunk[] = fileHunks.map(h => ({
-        old_start: h.oldRange.start - 1,  // Convert to 0-indexed
-        old_count: h.oldRange.end - h.oldRange.start + 1,
-        new_start: h.range.start - 1,     // Convert to 0-indexed
-        new_count: h.range.end - h.range.start + 1
+        oldStart: h.oldRange.start - 1,  // Convert to 0-indexed
+        oldCount: h.oldRange.end - h.oldRange.start + 1,
+        newStart: h.range.start - 1,     // Convert to 0-indexed
+        newCount: h.range.end - h.range.start + 1
     }));
 
     // Create composite buffer with side-by-side layout
@@ -1696,27 +1700,27 @@ globalThis.side_by_side_diff_current_file = async () => {
         name: `*Diff: ${filePath}*`,
         mode: "diff-view",
         layout: {
-            layout_type: "side-by-side",
+            type: "side-by-side",
             ratios: [0.5, 0.5],
-            show_separator: true
+            showSeparator: true
         },
         sources: [
             {
-                buffer_id: oldBufferId,
+                bufferId: oldBufferId,
                 label: "OLD (HEAD)",
                 editable: false,
                 style: {
-                    remove_bg: [80, 40, 40],
-                    gutter_style: "diff-markers"
+                    removeBg: [80, 40, 40],
+                    gutterStyle: "diff-markers"
                 }
             },
             {
-                buffer_id: newBufferId,
+                bufferId: newBufferId,
                 label: "NEW (Working)",
                 editable: false,
                 style: {
-                    add_bg: [40, 80, 40],
-                    gutter_style: "diff-markers"
+                    addBg: [40, 80, 40],
+                    gutterStyle: "diff-markers"
                 }
             }
         ],
@@ -1746,10 +1750,10 @@ globalThis.side_by_side_diff_current_file = async () => {
 };
 
 // Register Modes and Commands
-editor.registerCommand("%cmd.review_diff", "%cmd.review_diff_desc", "start_review_diff", "global");
+editor.registerCommand("%cmd.review_diff", "%cmd.review_diff_desc", "start_review_diff", null);
 editor.registerCommand("%cmd.stop_review_diff", "%cmd.stop_review_diff_desc", "stop_review_diff", "review-mode");
 editor.registerCommand("%cmd.refresh_review_diff", "%cmd.refresh_review_diff_desc", "review_refresh", "review-mode");
-editor.registerCommand("%cmd.side_by_side_diff", "%cmd.side_by_side_diff_desc", "side_by_side_diff_current_file", "global");
+editor.registerCommand("%cmd.side_by_side_diff", "%cmd.side_by_side_diff_desc", "side_by_side_diff_current_file", null);
 
 // Review Comment Commands
 editor.registerCommand("%cmd.add_comment", "%cmd.add_comment_desc", "review_add_comment", "review-mode");

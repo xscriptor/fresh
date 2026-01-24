@@ -162,7 +162,7 @@ pub enum AsyncMessage {
     Plugin(fresh_core::api::PluginAsyncMessage),
 
     /// File open dialog: directory listing completed
-    FileOpenDirectoryLoaded(std::io::Result<Vec<crate::services::fs::FsEntry>>),
+    FileOpenDirectoryLoaded(std::io::Result<Vec<crate::services::fs::DirEntry>>),
 
     /// Terminal output received (triggers redraw)
     TerminalOutput { terminal_id: TerminalId },

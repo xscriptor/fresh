@@ -285,23 +285,22 @@ editor.registerCommand(
   "%cmd.enable",
   "%cmd.enable_desc",
   "colorHighlighterEnable",
-  "normal"
+  null
 );
 
 editor.registerCommand(
   "%cmd.disable",
   "%cmd.disable_desc",
   "colorHighlighterDisable",
-  "normal"
+  null
 );
 
 editor.registerCommand(
   "%cmd.toggle",
   "%cmd.toggle_desc",
   "colorHighlighterToggle",
-  "normal"
+  null
 );
 
 // Initialization
-editor.setStatus(editor.t("status.loaded"));
 editor.debug("Color Highlighter initialized - supports hex, rgb, hsl, and Rust Color::Rgb");

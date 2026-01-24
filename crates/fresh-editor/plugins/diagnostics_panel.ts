@@ -255,16 +255,15 @@ editor.registerCommand(
   "%cmd.show_diagnostics_panel",
   "%cmd.show_diagnostics_panel_desc",
   "show_diagnostics_panel",
-  "normal"
+  null
 );
 
 editor.registerCommand(
   "%cmd.toggle_diagnostics_panel",
   "%cmd.toggle_diagnostics_panel_desc",
   "toggle_diagnostics_panel",
-  "normal"
+  null
 );
 
 // Initialization
-editor.setStatus(editor.t("status.loaded"));
 editor.debug("Diagnostics Panel plugin initialized (using Finder abstraction)");

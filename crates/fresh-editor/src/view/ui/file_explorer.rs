@@ -195,7 +195,7 @@ impl FileExplorerRenderer {
 
         // Calculate the left side width for padding calculation
         let indent_width = indent * 2;
-        let indicator_width = if node.is_dir() { 3 } else { 2 }; // "▼● " or "● " or "  "
+        let indicator_width = if node.is_dir() { 2 } else { 2 }; // "▼ " or "  "
         let name_width = str_width(&node.entry.name);
         let left_side_width = indent_width + indicator_width + name_width;
 
@@ -206,63 +206,22 @@ impl FileExplorerRenderer {
 
         // Tree expansion indicator (only for directories)
         if node.is_dir() {
-            let has_unsaved =
-                Self::folder_has_modified_files(&node.entry.path, files_with_unsaved_changes);
-            let direct_decoration = decorations.direct_for_path(&node.entry.path);
-            let bubbled_decoration = decorations
-                .bubbled_for_path(&node.entry.path)
-                .filter(|_| direct_decoration.is_none());
-
             let indicator = if node.is_expanded() {
-                "▼"
+                "▼ "
             } else if node.is_collapsed() {
-                ">"
+                "> "
             } else if node.is_loading() {
-                "⟳"
+                "⟳ "
             } else {
-                "!"
+                "! "
             };
             spans.push(Span::styled(
                 indicator,
                 Style::default().fg(theme.diagnostic_warning_fg),
             ));
-
-            // Show a change indicator if folder contains unsaved or decorated children
-            if has_unsaved {
-                spans.push(Span::styled(
-                    "● ",
-                    Style::default().fg(theme.diagnostic_warning_fg),
-                ));
-            } else if let Some(decoration) = direct_decoration {
-                let symbol = Self::decoration_symbol(&decoration.symbol);
-                spans.push(Span::styled(
-                    format!("{symbol} "),
-                    Style::default().fg(Self::decoration_color(decoration)),
-                ));
-            } else if let Some(decoration) = bubbled_decoration {
-                spans.push(Span::styled(
-                    "● ",
-                    Style::default().fg(Self::decoration_color(decoration)),
-                ));
-            } else {
-                spans.push(Span::raw("  "));
-            }
         } else {
-            // For files, show unsaved indicator first, then plugin decoration
-            if files_with_unsaved_changes.contains(&node.entry.path) {
-                spans.push(Span::styled(
-                    "● ",
-                    Style::default().fg(theme.diagnostic_warning_fg),
-                ));
-            } else if let Some(decoration) = decorations.direct_for_path(&node.entry.path) {
-                let symbol = Self::decoration_symbol(&decoration.symbol);
-                spans.push(Span::styled(
-                    format!("{symbol} "),
-                    Style::default().fg(Self::decoration_color(decoration)),
-                ));
-            } else {
-                spans.push(Span::raw("  "));
-            }
+            // For files, add spacing to align with directory names
+            spans.push(Span::raw("  "));
         }
 
         // Name styling using theme colors
@@ -276,6 +235,9 @@ impl FileExplorerRenderer {
             .unwrap_or(false)
         {
             Style::default().fg(theme.line_number_fg)
+        } else if node.entry.is_symlink() {
+            // Symlinks use a distinct color (type color, typically cyan)
+            Style::default().fg(theme.syntax_type)
         } else if node.is_dir() {
             Style::default().fg(theme.syntax_keyword)
         } else {
@@ -284,46 +246,64 @@ impl FileExplorerRenderer {
 
         spans.push(Span::styled(node.entry.name.clone(), name_style));
 
-        // Size info for files, entry count for expanded directories (right-aligned)
-        let size_str = if node.is_file() {
-            node.entry
-                .metadata
-                .as_ref()
-                .and_then(|m| m.size)
-                .map(Self::format_size)
-        } else if node.is_expanded() {
-            let count = node.children.len();
-            Some(if count == 1 {
-                "1 item".to_string()
-            } else {
-                format!("{} items", count)
-            })
+        // Determine the right-side indicator (status symbol)
+        // Priority: unsaved changes > direct decoration > bubbled decoration (for dirs)
+        let has_unsaved = if node.is_dir() {
+            Self::folder_has_modified_files(&node.entry.path, files_with_unsaved_changes)
+        } else {
+            files_with_unsaved_changes.contains(&node.entry.path)
+        };
+
+        let direct_decoration = decorations.direct_for_path(&node.entry.path);
+        let bubbled_decoration = if node.is_dir() {
+            decorations
+                .bubbled_for_path(&node.entry.path)
+                .filter(|_| direct_decoration.is_none())
         } else {
             None
         };
 
-        if let Some(size_text) = size_str {
-            let size_display_width = str_width(&size_text);
-            // Calculate padding needed for right-alignment
-            // We need at least 1 space between name and size
-            let min_gap = 1;
-            let padding = if left_side_width + min_gap + size_display_width < content_width {
-                content_width - left_side_width - size_display_width
-            } else {
-                min_gap
-            };
+        let right_indicator: Option<(String, Color)> = if has_unsaved {
+            Some(("●".to_string(), theme.diagnostic_warning_fg))
+        } else if let Some(decoration) = direct_decoration {
+            let symbol = Self::decoration_symbol(&decoration.symbol);
+            Some((symbol, Self::decoration_color(decoration)))
+        } else {
+            bubbled_decoration
+                .map(|decoration| ("●".to_string(), Self::decoration_color(decoration)))
+        };
 
-            spans.push(Span::raw(" ".repeat(padding)));
-            spans.push(Span::styled(
-                size_text,
-                Style::default().fg(theme.line_number_fg),
-            ));
+        // Calculate right-side content width
+        let right_indicator_width = right_indicator
+            .as_ref()
+            .map(|(s, _)| str_width(s))
+            .unwrap_or(0);
+
+        // Error indicator
+        let error_text = if node.is_error() { " [Error]" } else { "" };
+        let error_width = str_width(error_text);
+
+        let total_right_width = right_indicator_width + error_width;
+
+        // Calculate padding for right-alignment
+        let min_gap = 1;
+        let padding = if left_side_width + min_gap + total_right_width < content_width {
+            content_width - left_side_width - total_right_width
+        } else {
+            min_gap
+        };
+
+        spans.push(Span::raw(" ".repeat(padding)));
+
+        // Add right-aligned status indicator
+        if let Some((symbol, color)) = right_indicator {
+            spans.push(Span::styled(symbol, Style::default().fg(color)));
         }
 
         // Error indicator
         if node.is_error() {
             spans.push(Span::styled(
-                " [Error]",
+                error_text,
                 Style::default().fg(theme.diagnostic_error_fg),
             ));
         }
@@ -340,53 +320,7 @@ impl FileExplorerRenderer {
     }
 
     fn decoration_color(decoration: &crate::view::file_tree::FileExplorerDecoration) -> Color {
-        let (r, g, b) = decoration.color;
+        let [r, g, b] = decoration.color;
         Color::Rgb(r, g, b)
-    }
-
-    /// Format file size for display
-    /// - Uses 1 decimal place max
-    /// - All sizes shown in KB/MB/GB (no bytes) for alignment
-    /// - Files < 1KB shown as fractional KB (e.g., 0.3 KB)
-    fn format_size(size: u64) -> String {
-        const KB: f64 = 1024.0;
-        const MB: f64 = KB * 1024.0;
-        const GB: f64 = MB * 1024.0;
-
-        let size_f = size as f64;
-
-        if size_f >= GB {
-            format!("{:.1} GB", size_f / GB)
-        } else if size_f >= MB {
-            format!("{:.1} MB", size_f / MB)
-        } else {
-            // Show everything in KB, including < 1KB as fractional
-            format!("{:.1} KB", size_f / KB)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_size() {
-        // Small files shown as fractional KB
-        assert_eq!(FileExplorerRenderer::format_size(0), "0.0 KB");
-        assert_eq!(FileExplorerRenderer::format_size(300), "0.3 KB");
-        assert_eq!(FileExplorerRenderer::format_size(500), "0.5 KB");
-        // KB range
-        assert_eq!(FileExplorerRenderer::format_size(1024), "1.0 KB");
-        assert_eq!(FileExplorerRenderer::format_size(1536), "1.5 KB");
-        assert_eq!(FileExplorerRenderer::format_size(10240), "10.0 KB");
-        // MB range
-        assert_eq!(FileExplorerRenderer::format_size(1024 * 1024), "1.0 MB");
-        assert_eq!(FileExplorerRenderer::format_size(1536 * 1024), "1.5 MB");
-        // GB range
-        assert_eq!(
-            FileExplorerRenderer::format_size(1024 * 1024 * 1024),
-            "1.0 GB"
-        );
     }
 }

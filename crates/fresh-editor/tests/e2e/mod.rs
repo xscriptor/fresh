@@ -39,6 +39,7 @@ pub mod open_folder;
 pub mod paste;
 #[cfg(feature = "plugins")]
 pub mod plugins;
+pub mod popup_selection;
 pub mod position_history;
 pub mod position_history_bugs;
 pub mod position_history_debug;
@@ -54,6 +55,7 @@ pub mod search;
 pub mod selection;
 pub mod session;
 pub mod settings;
+pub mod settings_config_issue_806;
 pub mod settings_paste;
 pub mod shell_command;
 pub mod slow_filesystem;
@@ -63,6 +65,8 @@ pub mod split_view;
 pub mod split_view_expectations;
 pub mod stdin_input;
 pub mod sudo_save_prompt;
+#[cfg(unix)]
+pub mod symlinks;
 pub mod tab_config;
 pub mod tab_drag;
 pub mod tab_indent_selection;

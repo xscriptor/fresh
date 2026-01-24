@@ -1,9 +1,14 @@
 /// Comprehensive tests for LineIterator to catch position/content bugs
 use fresh::model::buffer::TextBuffer;
+use fresh::model::filesystem::StdFileSystem;
+
+fn test_fs() -> std::sync::Arc<dyn fresh::model::filesystem::FileSystem + Send + Sync> {
+    std::sync::Arc::new(StdFileSystem)
+}
 
 #[test]
 fn test_line_iterator_simple() {
-    let mut buffer = TextBuffer::from_bytes(b"Line 1\nLine 2\nLine 3\n".to_vec());
+    let mut buffer = TextBuffer::from_bytes(b"Line 1\nLine 2\nLine 3\n".to_vec(), test_fs());
 
     // Test starting at beginning
     let mut iter = buffer.line_iterator(0, 80);
@@ -24,7 +29,7 @@ fn test_line_iterator_simple() {
 
 #[test]
 fn test_line_iterator_empty_lines() {
-    let mut buffer = TextBuffer::from_bytes(b"Line 1\n\nLine 3\n".to_vec());
+    let mut buffer = TextBuffer::from_bytes(b"Line 1\n\nLine 3\n".to_vec(), test_fs());
 
     // Test starting at position 0
     let mut iter = buffer.line_iterator(0, 80);
@@ -58,7 +63,7 @@ fn test_line_iterator_empty_lines() {
 
 #[test]
 fn test_line_iterator_multiple_empty_lines() {
-    let mut buffer = TextBuffer::from_bytes(b"Line 1\n\n\n\nLine 5\n".to_vec());
+    let mut buffer = TextBuffer::from_bytes(b"Line 1\n\n\n\nLine 5\n".to_vec(), test_fs());
 
     let mut iter = buffer.line_iterator(0, 80);
     assert_eq!(iter.next_line().unwrap().0, 0); // "Line 1\n"
@@ -71,7 +76,7 @@ fn test_line_iterator_multiple_empty_lines() {
 #[test]
 fn test_line_iterator_starts_mid_piece() {
     // This test creates a buffer with edits that cause pieces to span multiple lines
-    let mut buffer = TextBuffer::from_bytes(b"Line 1\nLine 2\nLine 3\n".to_vec());
+    let mut buffer = TextBuffer::from_bytes(b"Line 1\nLine 2\nLine 3\n".to_vec(), test_fs());
 
     // Insert at beginning to create a new piece
     buffer.insert_bytes(0, b"Prefix\n".to_vec());
@@ -88,7 +93,7 @@ fn test_line_iterator_starts_mid_piece() {
 
 #[test]
 fn test_line_iterator_after_multiple_edits() {
-    let mut buffer = TextBuffer::from_bytes(b"ABC\n".to_vec());
+    let mut buffer = TextBuffer::from_bytes(b"ABC\n".to_vec(), test_fs());
 
     // Create multiple pieces through edits
     buffer.insert_bytes(4, b"DEF\n".to_vec()); // "ABC\nDEF\n"
@@ -109,7 +114,7 @@ fn test_line_iterator_after_multiple_edits() {
 
 #[test]
 fn test_line_iterator_prev() {
-    let mut buffer = TextBuffer::from_bytes(b"Line 1\n\nLine 3\n".to_vec());
+    let mut buffer = TextBuffer::from_bytes(b"Line 1\n\nLine 3\n".to_vec(), test_fs());
 
     let mut iter = buffer.line_iterator(8, 80); // Start at "Line 3"
     assert_eq!(iter.current_position(), 8);
@@ -125,7 +130,7 @@ fn test_line_iterator_prev() {
 
 #[test]
 fn test_line_iterator_no_trailing_newline() {
-    let mut buffer = TextBuffer::from_bytes(b"Line 1\nLine 2".to_vec());
+    let mut buffer = TextBuffer::from_bytes(b"Line 1\nLine 2".to_vec(), test_fs());
 
     let mut iter = buffer.line_iterator(0, 80);
     assert_eq!(iter.next_line().unwrap(), (0, "Line 1\n".to_string()));
@@ -136,7 +141,7 @@ fn test_line_iterator_no_trailing_newline() {
 
 #[test]
 fn test_line_iterator_single_char_lines() {
-    let mut buffer = TextBuffer::from_bytes(b"a\nb\nc\n".to_vec());
+    let mut buffer = TextBuffer::from_bytes(b"a\nb\nc\n".to_vec(), test_fs());
 
     let mut iter = buffer.line_iterator(0, 80);
     assert_eq!(iter.next_line().unwrap(), (0, "a\n".to_string()));

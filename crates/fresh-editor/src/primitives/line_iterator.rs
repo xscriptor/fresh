@@ -323,11 +323,17 @@ impl<'a> LineIterator<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use super::*;
 
     #[test]
     fn test_line_iterator_new_at_line_start() {
-        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\nTest".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\nTest".to_vec(), test_fs());
 
         // Test iterator at position 0 (start of line 0)
         let iter = buffer.line_iterator(0, 80);
@@ -344,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_line_iterator_new_in_middle_of_line() {
-        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\nTest".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\nTest".to_vec(), test_fs());
 
         // Test iterator at position 3 (middle of "Hello")
         let iter = buffer.line_iterator(3, 80);
@@ -361,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_line_iterator_next() {
-        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\nTest".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\nTest".to_vec(), test_fs());
         let mut iter = buffer.line_iterator(0, 80);
 
         // First line
@@ -385,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_line_iterator_from_middle_position() {
-        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\nTest".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\nTest".to_vec(), test_fs());
 
         // Start from position 9 (middle of "World")
         let mut iter = buffer.line_iterator(9, 80);
@@ -408,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_line_iterator_offset_to_position_consistency() {
-        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld".to_vec(), test_fs());
 
         // For each position, verify that offset_to_position returns correct values
         let expected = vec![
@@ -451,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_line_iterator_prev() {
-        let mut buffer = TextBuffer::from_bytes(b"Line1\nLine2\nLine3".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Line1\nLine2\nLine3".to_vec(), test_fs());
 
         // Start at line 2
         let mut iter = buffer.line_iterator(12, 80);
@@ -472,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_line_iterator_single_line() {
-        let mut buffer = TextBuffer::from_bytes(b"Only one line".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Only one line".to_vec(), test_fs());
         let mut iter = buffer.line_iterator(0, 80);
 
         let (pos, content) = iter.next_line().expect("Should have the line");
@@ -485,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_line_iterator_empty_lines() {
-        let mut buffer = TextBuffer::from_bytes(b"Line1\n\nLine3".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Line1\n\nLine3".to_vec(), test_fs());
         let mut iter = buffer.line_iterator(0, 80);
 
         let (pos, content) = iter.next_line().expect("First line");
@@ -503,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_line_iterator_trailing_newline_emits_empty_line() {
-        let mut buffer = TextBuffer::from_bytes(b"Hello world\n".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Hello world\n".to_vec(), test_fs());
         let mut iter = buffer.line_iterator(0, 80);
 
         let (pos, content) = iter.next_line().expect("First line");
@@ -521,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_line_iterator_trailing_newline_starting_at_eof() {
-        let mut buffer = TextBuffer::from_bytes(b"Hello world\n".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"Hello world\n".to_vec(), test_fs());
         let buffer_len = buffer.len();
         let mut iter = buffer.line_iterator(buffer_len, 80);
 
@@ -544,7 +550,7 @@ mod tests {
         // Create a line that's 200 bytes long (much longer than typical estimate)
         let long_line = "x".repeat(200);
         let content = format!("{}\n", long_line);
-        let mut buffer = TextBuffer::from_bytes(content.as_bytes().to_vec());
+        let mut buffer = TextBuffer::from_bytes(content.as_bytes().to_vec(), test_fs());
 
         // Use a small estimated_line_length (50 bytes) - smaller than actual line
         let estimated_line_length = 50;
@@ -581,7 +587,7 @@ mod tests {
         // Short line, very long line, short line
         let long_line = "L".repeat(300);
         let content = format!("Short1\n{}\nShort2\n", long_line);
-        let mut buffer = TextBuffer::from_bytes(content.as_bytes().to_vec());
+        let mut buffer = TextBuffer::from_bytes(content.as_bytes().to_vec(), test_fs());
 
         let estimated_line_length = 50;
 
@@ -606,7 +612,7 @@ mod tests {
         // Bytes: a=0, b=1, c=2, \r=3, \n=4, d=5, e=6, f=7, \r=8, \n=9, g=10, h=11, i=12, \r=13, \n=14
         let content = b"abc\r\ndef\r\nghi\r\n";
         let buffer_len = content.len();
-        let mut buffer = TextBuffer::from_bytes(content.to_vec());
+        let mut buffer = TextBuffer::from_bytes(content.to_vec(), test_fs());
 
         let mut iter = buffer.line_iterator(0, 80);
 
@@ -644,7 +650,7 @@ mod tests {
         // CRLF content: "abc\r\ndef\r\nghi"
         // Bytes: a=0, b=1, c=2, \r=3, \n=4, d=5, e=6, f=7, \r=8, \n=9, g=10, h=11, i=12
         let content = b"abc\r\ndef\r\nghi";
-        let mut buffer = TextBuffer::from_bytes(content.to_vec());
+        let mut buffer = TextBuffer::from_bytes(content.to_vec(), test_fs());
 
         // Start iterator from middle of second line (byte 6 = 'e')
         let iter = buffer.line_iterator(6, 80);
@@ -690,7 +696,7 @@ mod tests {
 
         let content_bytes = content.as_bytes().to_vec();
         let content_len = content_bytes.len();
-        let mut buffer = TextBuffer::from_bytes(content_bytes);
+        let mut buffer = TextBuffer::from_bytes(content_bytes, test_fs());
 
         // Iterate and collect all chunks
         let mut iter = buffer.line_iterator(0, 200);

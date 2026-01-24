@@ -68,8 +68,8 @@ impl Editor {
 
         // Update file modification time after save
         if let Some(ref p) = path {
-            if let Ok(metadata) = std::fs::metadata(p) {
-                if let Ok(mtime) = metadata.modified() {
+            if let Ok(metadata) = self.filesystem.metadata(p) {
+                if let Some(mtime) = metadata.modified {
                     self.file_mod_times.insert(p.clone(), mtime);
                 }
             }
@@ -159,6 +159,7 @@ impl Editor {
             self.config.editor.large_file_threshold_bytes as usize,
             &self.grammar_registry,
             &self.config.languages,
+            std::sync::Arc::clone(&self.filesystem),
         )?;
 
         // Restore cursor positions (clamped to valid range for new file size)
@@ -194,8 +195,8 @@ impl Editor {
         self.seen_byte_ranges.remove(&buffer_id);
 
         // Update the file modification time
-        if let Ok(metadata) = std::fs::metadata(&path) {
-            if let Ok(mtime) = metadata.modified() {
+        if let Ok(metadata) = self.filesystem.metadata(&path) {
+            if let Some(mtime) = metadata.modified {
                 self.file_mod_times.insert(path.clone(), mtime);
             }
         }
@@ -253,10 +254,10 @@ impl Editor {
 
         for path in files_to_check {
             // Get current mtime
-            let current_mtime = match std::fs::metadata(&path) {
-                Ok(meta) => match meta.modified() {
-                    Ok(mtime) => mtime,
-                    Err(_) => continue,
+            let current_mtime = match self.filesystem.metadata(&path) {
+                Ok(meta) => match meta.modified {
+                    Some(mtime) => mtime,
+                    None => continue,
                 },
                 Err(_) => continue, // File might have been deleted
             };
@@ -313,10 +314,10 @@ impl Editor {
 
         for (node_id, path) in expanded_dirs {
             // Get current mtime
-            let current_mtime = match std::fs::metadata(&path) {
-                Ok(meta) => match meta.modified() {
-                    Ok(mtime) => mtime,
-                    Err(_) => continue,
+            let current_mtime = match self.filesystem.metadata(&path) {
+                Ok(meta) => match meta.modified {
+                    Some(mtime) => mtime,
+                    None => continue,
                 },
                 Err(_) => continue, // Directory might have been deleted
             };
@@ -376,7 +377,12 @@ impl Editor {
         };
 
         // Check file size
-        let file_size = std::fs::metadata(path).ok().map(|m| m.len()).unwrap_or(0);
+        let file_size = self
+            .filesystem
+            .metadata(path)
+            .ok()
+            .map(|m| m.size)
+            .unwrap_or(0);
         if file_size > self.config.editor.large_file_threshold_bytes {
             let reason = format!("File too large ({} bytes)", file_size);
             tracing::warn!(
@@ -501,8 +507,8 @@ impl Editor {
     /// This is used by the polling-based auto-revert to detect external changes
     pub(crate) fn watch_file(&mut self, path: &Path) {
         // Record current modification time for polling
-        if let Ok(metadata) = std::fs::metadata(path) {
-            if let Ok(mtime) = metadata.modified() {
+        if let Ok(metadata) = self.filesystem.metadata(path) {
+            if let Some(mtime) = metadata.modified {
                 self.file_mod_times.insert(path.to_path_buf(), mtime);
             }
         }
@@ -621,6 +627,7 @@ impl Editor {
             self.config.editor.large_file_threshold_bytes as usize,
             &self.grammar_registry,
             &self.config.languages,
+            std::sync::Arc::clone(&self.filesystem),
         )?;
 
         // Get the new file size for clamping
@@ -655,8 +662,8 @@ impl Editor {
         self.seen_byte_ranges.remove(&buffer_id);
 
         // Update the file modification time
-        if let Ok(metadata) = std::fs::metadata(path) {
-            if let Ok(mtime) = metadata.modified() {
+        if let Ok(metadata) = self.filesystem.metadata(path) {
+            if let Some(mtime) = metadata.modified {
                 self.file_mod_times.insert(path.to_path_buf(), mtime);
             }
         }
@@ -698,9 +705,14 @@ impl Editor {
             // Check if the file actually changed (compare mod times)
             // We use optimistic concurrency: check mtime, and if we decide to revert,
             // re-check to handle the race where a save completed between our checks.
-            let current_mtime = match std::fs::metadata(&path).and_then(|m| m.modified()) {
-                Ok(mtime) => mtime,
-                Err(_) => continue, // Can't read file, skip
+            let current_mtime = match self
+                .filesystem
+                .metadata(&path)
+                .ok()
+                .and_then(|m| m.modified)
+            {
+                Some(mtime) => mtime,
+                None => continue, // Can't read file, skip
             };
 
             let dominated_by_stored = self
@@ -769,9 +781,9 @@ impl Editor {
         let path = self.active_state().buffer.file_path()?;
 
         // Get current file modification time
-        let current_mtime = match std::fs::metadata(path).and_then(|m| m.modified()) {
-            Ok(mtime) => mtime,
-            Err(_) => return None, // File doesn't exist or can't read metadata
+        let current_mtime = match self.filesystem.metadata(path).ok().and_then(|m| m.modified) {
+            Some(mtime) => mtime,
+            None => return None, // File doesn't exist or can't read metadata
         };
 
         // Compare with our recorded modification time

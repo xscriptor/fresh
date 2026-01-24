@@ -251,7 +251,7 @@ editor.registerCommand(
   "%cmd.project_setup",
   "%cmd.project_setup_desc",
   "clangdProjectSetup",
-  ""
+  null
 );
 
 globalThis.clangdOpenProjectConfig = function(): void {
@@ -287,17 +287,16 @@ editor.registerCommand(
   "%cmd.switch_source_header",
   "%cmd.switch_source_header_desc",
   "clangdSwitchSourceHeader",
-  "normal"
+  null
 );
 
 editor.registerCommand(
   "%cmd.open_project_config",
   "%cmd.open_project_config_desc",
   "clangdOpenProjectConfig",
-  "normal"
+  null
 );
 
-setClangdStatus(editor.t("status.plugin_loaded"));
 
 globalThis.onClangdCustomNotification = function(payload: {
   language: string;

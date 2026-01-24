@@ -74,6 +74,11 @@ impl ColorCapability {
             }
         }
 
+        // Windows Terminal sets WT_SESSION and supports truecolor
+        if std::env::var("WT_SESSION").is_ok() {
+            return ColorCapability::TrueColor;
+        }
+
         // Check TERM for other indicators
         if let Ok(term) = std::env::var("TERM") {
             let t = term.to_lowercase();
@@ -134,9 +139,9 @@ fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
         if gray > 248 {
             return 231; // Use white from color cube
         }
-        // Map to grayscale ramp (232-255, 24 shades)
-        // Each step is ~10.625 units
-        return 232 + ((gray - 8) * 24 / 240) as u8;
+        // Map to grayscale ramp (232-255, 24 shades = indices 0-23)
+        // Formula maps gray 8-248 to offset 0-23, avoiding u8 overflow
+        return 232 + ((gray - 8) * 23 / 240) as u8;
     }
 
     // Map to 6x6x6 color cube (indices 16-231)
@@ -367,6 +372,48 @@ mod tests {
     fn test_rgb_to_256_grayscale() {
         let idx = rgb_to_256(128, 128, 128);
         assert!(idx >= 232); // Should be in grayscale range (232-255, u8 max is 255)
+    }
+
+    #[test]
+    fn test_rgb_to_256_light_gray_no_overflow() {
+        // Regression test: light grays near 248 used to overflow u8 and become 0 (black)
+        // These are colors used in the light theme for menus
+        let idx_245 = rgb_to_256(245, 245, 245); // menu_bg
+        let idx_248 = rgb_to_256(248, 248, 248); // menu_dropdown_bg
+
+        // Light grays should map to grayscale ramp (232-255) or white (231), not black
+        assert!(
+            idx_245 >= 231,
+            "RGB(245,245,245) should be light, got index {}",
+            idx_245
+        );
+        assert!(
+            idx_248 >= 231,
+            "RGB(248,248,248) should be light, got index {}",
+            idx_248
+        );
+
+        // Critical: ensure no overflow to 0 (which would display as black)
+        assert_ne!(idx_245, 0, "RGB(245,245,245) overflowed to 0");
+        assert_ne!(idx_248, 0, "RGB(248,248,248) overflowed to 0");
+    }
+
+    #[test]
+    fn test_rgb_to_256_grayscale_never_overflows() {
+        // Property test: no grayscale value should ever produce index 0-15 (ANSI colors)
+        // or cause overflow. All grays should map to either:
+        // - 16 (black from color cube) for very dark
+        // - 231 (white from color cube) for very bright
+        // - 232-255 (grayscale ramp) for mid-range
+        for gray in 0..=255u8 {
+            let idx = rgb_to_256(gray, gray, gray);
+            assert!(
+                idx == 16 || idx == 231 || (232..=255).contains(&idx),
+                "Gray {} mapped to invalid index {}, expected 16, 231, or 232-255",
+                gray,
+                idx
+            );
+        }
     }
 
     #[test]

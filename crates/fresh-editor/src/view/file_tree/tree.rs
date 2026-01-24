@@ -1,5 +1,6 @@
 use super::node::{NodeId, NodeState, TreeNode};
-use crate::services::fs::{FsEntry, FsManager};
+use crate::model::filesystem::DirEntry;
+use crate::services::fs::FsManager;
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -275,7 +276,7 @@ impl FileTree {
     }
 
     /// Add a new node to the tree
-    fn add_node(&mut self, entry: FsEntry, parent: Option<NodeId>) -> NodeId {
+    fn add_node(&mut self, entry: DirEntry, parent: Option<NodeId>) -> NodeId {
         let id = NodeId(self.next_id);
         self.next_id += 1;
 
@@ -388,7 +389,7 @@ impl FileTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::fs::LocalFsBackend;
+    use crate::model::filesystem::StdFileSystem;
     use std::fs as std_fs;
     use tempfile::TempDir;
 
@@ -416,7 +417,7 @@ mod tests {
 
         std_fs::write(temp_path.join("file4.txt"), "content4").unwrap();
 
-        let backend = Arc::new(LocalFsBackend::new());
+        let backend = Arc::new(StdFileSystem);
         let manager = Arc::new(FsManager::new(backend));
         let tree = FileTree::new(temp_path.to_path_buf(), manager)
             .await
@@ -599,7 +600,7 @@ mod tests {
         std_fs::create_dir(temp_path.join("dir1")).unwrap();
         std_fs::write(temp_path.join("dir1/file1.txt"), "content").unwrap();
 
-        let backend = Arc::new(LocalFsBackend::new());
+        let backend = Arc::new(StdFileSystem);
         let manager = Arc::new(FsManager::new(backend));
         let mut tree = FileTree::new(temp_path.to_path_buf(), manager)
             .await

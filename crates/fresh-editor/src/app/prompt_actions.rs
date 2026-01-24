@@ -273,13 +273,13 @@ impl Editor {
                                 t!("prompt.sudo_save_failed", error = e.to_string()).to_string(),
                             );
                             // Clean up temp file on failure
-                            let _ = std::fs::remove_file(&info.temp_path);
+                            let _ = self.filesystem.remove_file(&info.temp_path);
                         }
                     }
                 } else {
                     self.set_status_message(t!("buffer.save_cancelled").to_string());
                     // Clean up temp file
-                    let _ = std::fs::remove_file(&info.temp_path);
+                    let _ = self.filesystem.remove_file(&info.temp_path);
                 }
             }
             PromptType::ConfirmOverwriteFile { path } => {
@@ -363,8 +363,19 @@ impl Editor {
             PromptType::SetLineEnding => {
                 self.handle_set_line_ending(&input);
             }
+            PromptType::SetLanguage => {
+                self.handle_set_language(&input);
+            }
             PromptType::ShellCommand { replace } => {
                 self.handle_shell_command(&input, replace);
+            }
+            PromptType::AsyncPrompt => {
+                // Resolve the pending async prompt callback with the input text
+                if let Some(callback_id) = self.pending_async_prompt_callback.take() {
+                    // Serialize the input as a JSON string
+                    let json = serde_json::to_string(&input).unwrap_or_else(|_| "null".to_string());
+                    self.plugin_manager.resolve_callback(callback_id, json);
+                }
             }
         }
         PromptResult::Done
@@ -445,8 +456,8 @@ impl Editor {
                     self.active_event_log().len()
                 );
 
-                if let Ok(metadata) = std::fs::metadata(&full_path) {
-                    if let Ok(mtime) = metadata.modified() {
+                if let Ok(metadata) = self.filesystem.metadata(&full_path) {
+                    if let Some(mtime) = metadata.modified {
                         self.file_mod_times.insert(full_path.clone(), mtime);
                     }
                 }
@@ -569,6 +580,48 @@ impl Editor {
             None => {
                 self.set_status_message(t!("error.unknown_line_ending", input = input).to_string());
             }
+        }
+    }
+
+    /// Handle SetLanguage prompt confirmation.
+    fn handle_set_language(&mut self, input: &str) {
+        use crate::primitives::highlight_engine::HighlightEngine;
+        use crate::primitives::highlighter::Language;
+
+        let trimmed = input.trim();
+
+        // Check for "Plain Text" (no highlighting)
+        if trimmed == "Plain Text" || trimmed.to_lowercase() == "text" {
+            let buffer_id = self.active_buffer();
+            if let Some(state) = self.buffers.get_mut(&buffer_id) {
+                state.language = "Plain Text".to_string();
+                state.highlighter = HighlightEngine::None;
+                self.set_status_message("Language set to Plain Text".to_string());
+            }
+            return;
+        }
+
+        // Try to find the syntax by name in the grammar registry
+        // This supports all syntect syntaxes (100+) plus user-configured grammars
+        if self.grammar_registry.find_syntax_by_name(trimmed).is_some() {
+            // Try to detect a tree-sitter language for non-highlighting features
+            // (indentation, semantic highlighting). This is best-effort since
+            // tree-sitter only supports ~18 languages while syntect supports 100+.
+            let ts_language = Language::from_name(trimmed);
+
+            let buffer_id = self.active_buffer();
+            if let Some(state) = self.buffers.get_mut(&buffer_id) {
+                state.language = trimmed.to_string();
+                state.highlighter =
+                    HighlightEngine::for_syntax_name(trimmed, &self.grammar_registry, ts_language);
+                // Update reference highlighter if tree-sitter language is available
+                if let Some(lang) = ts_language {
+                    state.reference_highlighter.set_language(&lang);
+                }
+                self.set_status_message(format!("Language set to {}", trimmed));
+            }
+        } else {
+            self.set_status_message(format!("Unknown language: {}", input));
         }
     }
 

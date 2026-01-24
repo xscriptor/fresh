@@ -602,7 +602,12 @@ fn test_large_file_get_all_text_with_unloaded_regions() {
 
     // Load with a small threshold to trigger large file mode
     let threshold = 1024; // 1KB threshold makes 50KB file "large"
-    let mut buffer = TextBuffer::load_from_file(&file_path, threshold).unwrap();
+    let mut buffer = TextBuffer::load_from_file(
+        &file_path,
+        threshold,
+        std::sync::Arc::new(fresh::model::filesystem::StdFileSystem),
+    )
+    .unwrap();
 
     // Verify we're in large file mode
     assert!(
@@ -662,7 +667,12 @@ fn test_huge_file_recovery_is_small() {
 
     // Load with a small threshold to trigger large file mode
     let threshold = 100; // Very small threshold to force large file mode
-    let mut buffer = TextBuffer::load_from_file(&file_path, threshold).unwrap();
+    let mut buffer = TextBuffer::load_from_file(
+        &file_path,
+        threshold,
+        std::sync::Arc::new(fresh::model::filesystem::StdFileSystem),
+    )
+    .unwrap();
 
     // Verify it's in large file mode
     assert!(buffer.is_large_file(), "Should be in large file mode");

@@ -367,12 +367,16 @@ pub enum HoverTarget {
     MaximizeSplitButton(SplitId),
     /// Hovering over the file explorer close button
     FileExplorerCloseButton,
+    /// Hovering over a file explorer item's status indicator (path)
+    FileExplorerStatusIndicator(std::path::PathBuf),
     /// Hovering over the status bar LSP indicator
     StatusBarLspIndicator,
     /// Hovering over the status bar warning badge
     StatusBarWarningBadge,
     /// Hovering over the status bar line ending indicator
     StatusBarLineEndingIndicator,
+    /// Hovering over the status bar language indicator
+    StatusBarLanguageIndicator,
     /// Hovering over the search options "Case Sensitive" checkbox
     SearchOptionCaseSensitive,
     /// Hovering over the search options "Whole Word" checkbox
@@ -580,6 +584,8 @@ pub(super) struct MouseState {
     pub dragging_popup_scrollbar: Option<usize>,
     /// Initial scroll offset when starting to drag popup scrollbar
     pub drag_start_popup_scroll: Option<usize>,
+    /// Whether we're currently selecting text in a popup (popup index)
+    pub selecting_in_popup: Option<usize>,
 }
 
 /// Mapping from visual row to buffer positions for mouse click handling
@@ -651,6 +657,8 @@ pub(crate) struct CachedLayout {
     pub status_bar_warning_area: Option<(u16, u16, u16)>,
     /// Status bar line ending indicator area (row, start_col, end_col)
     pub status_bar_line_ending_area: Option<(u16, u16, u16)>,
+    /// Status bar language indicator area (row, start_col, end_col)
+    pub status_bar_language_area: Option<(u16, u16, u16)>,
     /// Search options layout for checkbox hit testing
     pub search_options_layout: Option<crate::view::ui::status_bar::SearchOptionsLayout>,
 }

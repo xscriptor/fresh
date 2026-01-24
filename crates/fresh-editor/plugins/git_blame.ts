@@ -478,7 +478,7 @@ globalThis.show_git_blame = async function(): Promise<void> {
   }
 
   // Create virtual buffer with the file content
-  const bufferId = await editor.createVirtualBufferInExistingSplit({
+  const result = await editor.createVirtualBufferInExistingSplit({
     name: bufferName,
     mode: "git-blame",
     readOnly: true,
@@ -489,9 +489,9 @@ globalThis.show_git_blame = async function(): Promise<void> {
     editingDisabled: true,
   });
 
-  if (bufferId !== null) {
+  if (result !== null) {
     blameState.isOpen = true;
-    blameState.bufferId = bufferId;
+    blameState.bufferId = result.bufferId;
 
     // Add virtual lines for blame headers (persistent state model)
     addBlameHeaders();
@@ -677,26 +677,25 @@ editor.registerCommand(
   "%cmd.git_blame",
   "%cmd.git_blame_desc",
   "show_git_blame",
-  "normal"
+  null
 );
 
 editor.registerCommand(
   "%cmd.git_blame_close",
   "%cmd.git_blame_close_desc",
   "git_blame_close",
-  "normal"
+  null
 );
 
 editor.registerCommand(
   "%cmd.git_blame_go_back",
   "%cmd.git_blame_go_back_desc",
   "git_blame_go_back",
-  "normal"
+  null
 );
 
 // =============================================================================
 // Plugin Initialization
 // =============================================================================
 
-editor.setStatus(editor.t("status.ready"));
 editor.debug("Git Blame plugin initialized - Use 'Git Blame' command to open");

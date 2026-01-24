@@ -719,6 +719,7 @@ impl SplitRenderer {
         is_maximized: bool,
         relative_line_numbers: bool,
         tab_bar_visible: bool,
+        use_terminal_bg: bool,
     ) -> (
         Vec<(
             crate::model::event::SplitId,
@@ -882,12 +883,13 @@ impl SplitRenderer {
                             theme,
                             is_active,
                             view_state,
+                            use_terminal_bg,
                         );
 
                         // Render scrollbar for composite buffer
                         let total_rows = composite.row_count();
                         let content_height = layout.content_rect.height.saturating_sub(1) as usize; // -1 for header
-                        Self::render_composite_scrollbar(
+                        let (thumb_start, thumb_end) = Self::render_composite_scrollbar(
                             frame,
                             layout.scrollbar_rect,
                             total_rows,
@@ -895,6 +897,16 @@ impl SplitRenderer {
                             content_height,
                             is_active,
                         );
+
+                        // Store the areas for mouse handling
+                        split_areas.push((
+                            split_id,
+                            buffer_id,
+                            layout.content_rect,
+                            layout.scrollbar_rect,
+                            thumb_start,
+                            thumb_end,
+                        ));
                     }
                     view_line_mappings.insert(split_id, Vec::new());
                     continue;
@@ -952,6 +964,7 @@ impl SplitRenderer {
                     buffer_id,
                     hide_cursor,
                     relative_line_numbers,
+                    use_terminal_bg,
                 );
 
                 // Store view line mappings for mouse click handling
@@ -1065,8 +1078,16 @@ impl SplitRenderer {
         theme: &crate::view::theme::Theme,
         _is_active: bool,
         view_state: &mut crate::view::composite_view::CompositeViewState,
+        use_terminal_bg: bool,
     ) {
         use crate::model::composite_buffer::{CompositeLayout, RowType};
+
+        // Compute effective editor background: terminal default or theme-defined
+        let effective_editor_bg = if use_terminal_bg {
+            ratatui::style::Color::Reset
+        } else {
+            theme.editor_bg
+        };
 
         let scroll_row = view_state.scroll_row;
         let cursor_row = view_state.cursor_row;
@@ -1345,7 +1366,7 @@ impl SplitRenderer {
                     let bg = if is_cursor_row && is_focused_pane {
                         theme.current_line_bg
                     } else {
-                        row_bg.unwrap_or(theme.editor_bg)
+                        row_bg.unwrap_or(effective_editor_bg)
                     };
 
                     // Selection range for this row (only for focused pane)
@@ -1433,7 +1454,7 @@ impl SplitRenderer {
                     } else if is_cursor_row && is_focused_pane {
                         theme.current_line_bg
                     } else {
-                        row_bg.unwrap_or(theme.editor_bg)
+                        row_bg.unwrap_or(effective_editor_bg)
                     };
                     let style = Style::default().fg(theme.line_number_fg).bg(bg);
 
@@ -1621,10 +1642,10 @@ impl SplitRenderer {
         scroll_row: usize,
         viewport_height: usize,
         is_active: bool,
-    ) {
+    ) -> (usize, usize) {
         let height = scrollbar_rect.height as usize;
         if height == 0 || total_rows == 0 {
-            return;
+            return (0, 0);
         }
 
         // Calculate thumb size based on viewport ratio to total document
@@ -1682,6 +1703,8 @@ impl SplitRenderer {
             let paragraph = Paragraph::new(" ").style(style);
             frame.render_widget(paragraph, cell_area);
         }
+
+        (thumb_start, thumb_end)
     }
 
     fn split_layout(split_area: Rect, tab_bar_visible: bool) -> SplitLayout {
@@ -2708,6 +2731,7 @@ impl SplitRenderer {
         layout: &ComposeLayout,
         _view_mode: &ViewMode,
         theme: &crate::view::theme::Theme,
+        effective_editor_bg: ratatui::style::Color,
     ) {
         // Render margins if there are any pads (indicates compose layout is active)
         if layout.left_pad == 0 && layout.right_pad == 0 {
@@ -2719,7 +2743,7 @@ impl SplitRenderer {
         const PAPER_EDGE_WIDTH: u16 = 1;
 
         let desk_style = Style::default().bg(theme.compose_margin_bg);
-        let paper_style = Style::default().bg(theme.editor_bg);
+        let paper_style = Style::default().bg(effective_editor_bg);
 
         if layout.left_pad > 0 {
             let paper_edge = PAPER_EDGE_WIDTH.min(layout.left_pad);
@@ -3798,8 +3822,16 @@ impl SplitRenderer {
         _buffer_id: BufferId,
         hide_cursor: bool,
         relative_line_numbers: bool,
+        use_terminal_bg: bool,
     ) -> Vec<ViewLineMapping> {
         let _span = tracing::trace_span!("render_buffer_in_split").entered();
+
+        // Compute effective editor background: terminal default or theme-defined
+        let effective_editor_bg = if use_terminal_bg {
+            ratatui::style::Color::Reset
+        } else {
+            theme.editor_bg
+        };
 
         let line_wrap = viewport.line_wrap_enabled;
 
@@ -3855,7 +3887,14 @@ impl SplitRenderer {
         };
 
         let view_anchor = Self::calculate_view_anchor(&view_data.lines, viewport.top_byte);
-        Self::render_compose_margins(frame, area, &compose_layout, &view_mode, theme);
+        Self::render_compose_margins(
+            frame,
+            area,
+            &compose_layout,
+            &view_mode,
+            theme,
+            effective_editor_bg,
+        );
 
         let selection = Self::selection_context(state);
 
@@ -3965,7 +4004,7 @@ impl SplitRenderer {
                 &mut lines,
                 render_area.width,
                 bg,
-                theme.editor_bg,
+                effective_editor_bg,
                 theme.editor_fg,
                 background_fade,
                 background_x_offset,
@@ -3976,7 +4015,7 @@ impl SplitRenderer {
         frame.render_widget(Clear, render_area);
         let editor_block = Block::default()
             .borders(Borders::NONE)
-            .style(Style::default().bg(theme.editor_bg));
+            .style(Style::default().bg(effective_editor_bg));
         frame.render_widget(Paragraph::new(lines).block(editor_block), render_area);
 
         // Render column guides if present (for tables, etc.)
@@ -4138,6 +4177,12 @@ impl SplitRenderer {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use super::*;
     use crate::model::buffer::Buffer;
     use crate::primitives::display_width::str_width;
@@ -4157,8 +4202,8 @@ mod tests {
         cursor_pos: usize,
         gutters_enabled: bool,
     ) -> (LineRenderOutput, usize, bool, usize) {
-        let mut state = EditorState::new(20, 6, 1024);
-        state.buffer = Buffer::from_str(content, 1024);
+        let mut state = EditorState::new(20, 6, 1024, test_fs());
+        state.buffer = Buffer::from_str(content, 1024, test_fs());
         state.cursors.primary_mut().position = cursor_pos.min(state.buffer.len());
         // Create a standalone viewport (no longer part of EditorState)
         let viewport = Viewport::new(20, 4);
@@ -4196,7 +4241,7 @@ mod tests {
             content.len().max(1),
             visible_count,
         );
-        let theme = Theme::from_name(theme::THEME_DARK).unwrap();
+        let theme = Theme::load_builtin(theme::THEME_DARK).unwrap();
         let decorations = SplitRenderer::decoration_context(
             &mut state,
             viewport_start,
@@ -4579,7 +4624,7 @@ mod tests {
         // Default gutter includes: 1 char indicator + line number width + separator
         // For a 1-line buffer, line number width is typically 1 digit + padding
         let gutter_width = {
-            let mut state = EditorState::new(20, 6, 1024);
+            let mut state = EditorState::new(20, 6, 1024, test_fs());
             state.margins.left_config.enabled = true;
             state.margins.update_width_for_buffer(1);
             state.margins.left_total_width()
@@ -4849,7 +4894,7 @@ mod tests {
     fn test_build_base_tokens_crlf_single_line() {
         // Content: "abc\r\n" (5 bytes: a=0, b=1, c=2, \r=3, \n=4)
         let content = b"abc\r\n";
-        let mut buffer = Buffer::from_bytes(content.to_vec());
+        let mut buffer = Buffer::from_bytes(content.to_vec(), test_fs());
         buffer.set_line_ending(LineEnding::CRLF);
 
         let tokens = SplitRenderer::build_base_tokens_for_hook(
@@ -4898,7 +4943,7 @@ mod tests {
         // Line 2: d=5, e=6, f=7, \r=8, \n=9
         // Line 3: g=10, h=11, i=12, \r=13, \n=14
         let content = b"abc\r\ndef\r\nghi\r\n";
-        let mut buffer = Buffer::from_bytes(content.to_vec());
+        let mut buffer = Buffer::from_bytes(content.to_vec(), test_fs());
         buffer.set_line_ending(LineEnding::CRLF);
 
         let tokens = SplitRenderer::build_base_tokens_for_hook(
@@ -4978,7 +5023,7 @@ mod tests {
         // Line 1: a=0, b=1, c=2, \n=3
         // Line 2: d=4, e=5, f=6, \n=7
         let content = b"abc\ndef\n";
-        let mut buffer = Buffer::from_bytes(content.to_vec());
+        let mut buffer = Buffer::from_bytes(content.to_vec(), test_fs());
         buffer.set_line_ending(LineEnding::LF);
 
         let tokens = SplitRenderer::build_base_tokens_for_hook(
@@ -5025,7 +5070,7 @@ mod tests {
     fn test_build_base_tokens_crlf_in_lf_mode_shows_control_char() {
         // Content: "abc\r\n" but buffer is in LF mode
         let content = b"abc\r\n";
-        let mut buffer = Buffer::from_bytes(content.to_vec());
+        let mut buffer = Buffer::from_bytes(content.to_vec(), test_fs());
         buffer.set_line_ending(LineEnding::LF); // Force LF mode
 
         let tokens = SplitRenderer::build_base_tokens_for_hook(
@@ -5054,7 +5099,7 @@ mod tests {
         // Content: "abc\r\ndef\r\nghi\r\n" (15 bytes)
         // Start from byte 5 (beginning of "def")
         let content = b"abc\r\ndef\r\nghi\r\n";
-        let mut buffer = Buffer::from_bytes(content.to_vec());
+        let mut buffer = Buffer::from_bytes(content.to_vec(), test_fs());
         buffer.set_line_ending(LineEnding::CRLF);
 
         let tokens = SplitRenderer::build_base_tokens_for_hook(
@@ -5098,7 +5143,7 @@ mod tests {
         // Bytes: i=0, n=1, t=2, ' '=3, x=4, ;=5, \r=6, \n=7,
         //        i=8, n=9, t=10, ' '=11, y=12, ;=13, \r=14, \n=15
         let content = b"int x;\r\nint y;\r\n";
-        let mut buffer = Buffer::from_bytes(content.to_vec());
+        let mut buffer = Buffer::from_bytes(content.to_vec(), test_fs());
         buffer.set_line_ending(LineEnding::CRLF);
 
         // Step 1: Generate tokens

@@ -1,6 +1,84 @@
 # Release Notes
 
-## 0.1.82
+## 0.1.88
+
+### Features
+
+* **Status Bar Language Indicator**: Click the language name in the status bar to change syntax highlighting. Supports mouse wheel scrolling and type-to-filter.
+* **VS Code-like Completion UX**: Debounced completion triggers, Tab accepts completion, uppercase letters work in type-to-filter.
+* **Per-Language LSP Root URI**: LSP servers can now have per-language root URI detection. Includes automatic C# project root detection via `.csproj` files.
+* **Settings UI Improvements**: Settings organized by topic sections, improved focus colors, search navigates to setting, better Map control navigation.
+
+### Bug Fixes
+
+* **Tab Bar Mouse Events**: Fixed clicks on tabs not working when menu bar is hidden (#832).
+* **LSP Deadlock**: Fixed deadlock when LSP server sends requests while client is awaiting a response.
+* **LSP Root URI**: Include `root_uri` in LSP initialize params for server compatibility.
+* **Terminal Scrollback**: Fixed race condition truncating terminal backing file when PTY already wrote content.
+* **Plugin i18n**: Fixed placeholder format to use `%{variable}` syntax.
+* **Settings UI**: Fixed confirm dialog mouse clicks/Tab navigation, dropdown option selection, search result navigation, and content bleeding into footer.
+
+### Packaging
+
+* **Winget**: Added Windows Package Manager (winget) publishing to release pipeline.
+
+### Internal
+
+* **FileSystem Trait**: New IO abstraction layer enabling different backends (local, remote, WASM). All filesystem operations now use injectable `FileSystem` trait.
+
+---
+
+## 0.1.87
+
+### Features
+
+* **Language Support**: Added LSP configurations and syntax highlighting for Zig, Java, LaTeX, Markdown, and Templ.
+* **Git File Highlighting**: Syntax highlighting for git-related files (.gitignore, .gitattributes, .gitmodules).
+* **Plugin Type Safety**: TypeScript type definitions for plugin API with compile-time validation.
+
+### Bug Fixes
+
+* **Hover Popup**: Fixed scrolling to bottom, dismiss on click outside, block clicks inside popup.
+* **Settings UI**: Fixed overwriting manual config.json edits when saving from Settings UI (#806).
+* **Windows Terminal**: Fixed truecolor detection and 256-color grayscale conversion overflow.
+* **Composite Buffers**: Fixed mouse click sync, deserialization errors, and cursor positioning.
+* **Plugin Stability**: Plugin thread panics now propagate to main thread for proper error handling.
+* **Review Diff Plugin**: Fixed side-by-side diff commands not appearing in command palette.
+
+---
+
+## 0.1.86
+
+### Features
+
+* **Popup Text Selection**: Select and copy text from LSP hover popups and tooltips. Click and drag to select, Ctrl+C to copy.
+* **File Explorer Status Tooltips**: Hover over git status indicators (M, U, A) to see detailed explanations and diff stats. Directory tooltips show list of modified files.
+* **Terminal Background Transparency**: New `use_terminal_bg` config option allows terminal transparency or custom backgrounds to show through the editor (#640).
+* **Vi Mode Improvements**: Added `:w filename` to save to path, `:wq filename` to save and quit, `:q!` to force quit without saving. Added Ctrl+P (command palette) and Ctrl+Q (quit) to all vi modes.
+
+### Bug Fixes
+
+* **Settings UI Add Button**: Fixed "Add New" button not appearing for LSP and Languages maps in Settings UI.
+* **LSP Hover Markdown**: Improved markdown rendering - soft breaks now create newlines (fixing Python docstring formatting), inline code rendered without visible backticks.
+* **Symlink Directories**: Fixed symlinks to directories not showing expand marker and causing "Is a directory" error when opened (#787).
+* **Live Grep Preview**: Fixed preview not updating when navigating through search results (#636).
+* **Terminal Keyboard State**: Fixed arrow keys and Enter not working after exiting the editor due to Kitty keyboard protocol cleanup issue (#773).
+* **Plugin Commands Visibility**: Fixed many plugin commands (Toggle Vi Mode, Git Blame, Diagnostics Panel, etc.) not appearing in command palette.
+
+### UI Changes
+
+* **File Explorer Layout**: Git status indicators moved to rightmost column, matching VS Code's layout. Removed file size and item count for cleaner appearance.
+* **Quieter Startup**: Removed plugin "ready/loaded" status messages that cluttered the status bar on startup.
+
+### Internal
+
+* Separated I/O from pure types in theme and grammar modules for better testability and future WASM compatibility.
+* Fixed workspace crate dependencies for crates.io publishing.
+* Improved install.sh reliability for containers and edge cases.
+
+---
+
+## 0.1.83
 
 ### Breaking Changes
 

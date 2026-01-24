@@ -7,8 +7,9 @@ use crate::model::event::{
     Event, MarginContentData, MarginPositionData, OverlayFace as EventOverlayFace, PopupData,
     PopupPositionData,
 };
+use crate::model::filesystem::FileSystem;
 use crate::model::marker::MarkerList;
-use crate::primitives::grammar_registry::GrammarRegistry;
+use crate::primitives::grammar::GrammarRegistry;
 use crate::primitives::highlight_engine::HighlightEngine;
 use crate::primitives::highlighter::Language;
 use crate::primitives::indent::IndentCalculator;
@@ -16,13 +17,17 @@ use crate::primitives::reference_highlighter::ReferenceHighlighter;
 use crate::primitives::text_property::TextPropertyManager;
 use crate::view::margin::{MarginAnnotation, MarginContent, MarginManager, MarginPosition};
 use crate::view::overlay::{Overlay, OverlayFace, OverlayManager, UnderlineStyle};
-use crate::view::popup::{Popup, PopupContent, PopupListItem, PopupManager, PopupPosition};
+use crate::view::popup::{
+    Popup, PopupContent, PopupKind, PopupListItem, PopupManager, PopupPosition,
+};
 use crate::view::reference_highlight_overlay::ReferenceHighlightOverlay;
 use crate::view::virtual_text::VirtualTextManager;
 use anyhow::Result;
 use ratatui::style::{Color, Style};
+use rust_i18n::t;
 use std::cell::RefCell;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// Display mode for a buffer
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,9 +145,14 @@ impl EditorState {
     ///
     /// Note: width/height parameters are kept for backward compatibility but
     /// are no longer used - viewport is now owned by SplitViewState.
-    pub fn new(_width: u16, _height: u16, large_file_threshold: usize) -> Self {
+    pub fn new(
+        _width: u16,
+        _height: u16,
+        large_file_threshold: usize,
+        fs: Arc<dyn FileSystem + Send + Sync>,
+    ) -> Self {
         Self {
-            buffer: Buffer::new(large_file_threshold),
+            buffer: Buffer::new(large_file_threshold, fs),
             cursors: Cursors::new(),
             highlighter: HighlightEngine::None, // No file path, so no syntax highlighting
             indent_calculator: RefCell::new(IndentCalculator::new()),
@@ -214,18 +224,11 @@ impl EditorState {
         _height: u16,
         large_file_threshold: usize,
         registry: &GrammarRegistry,
+        fs: Arc<dyn FileSystem + Send + Sync>,
     ) -> anyhow::Result<Self> {
-        let buffer = Buffer::load_from_file(path, large_file_threshold)?;
+        let buffer = Buffer::load_from_file(path, large_file_threshold, fs)?;
 
-        // Create highlighter using HighlightEngine (tree-sitter preferred, TextMate fallback)
         let highlighter = HighlightEngine::for_file(path, registry);
-        tracing::debug!(
-            "Created highlighter for {:?} (backend: {})",
-            path,
-            highlighter.backend_name()
-        );
-
-        // Initialize semantic highlighter with language if available
         let language = Language::from_path(path);
         let mut reference_highlighter = ReferenceHighlighter::new();
         let language_name = if let Some(lang) = &language {
@@ -235,13 +238,8 @@ impl EditorState {
             "text".to_string()
         };
 
-        // Initialize marker list with buffer size
         let mut marker_list = MarkerList::new();
         if !buffer.is_empty() {
-            tracing::debug!(
-                "Initializing marker list for file with {} bytes",
-                buffer.len()
-            );
             marker_list.adjust_for_insert(0, buffer.len());
         }
 
@@ -255,7 +253,7 @@ impl EditorState {
             virtual_texts: VirtualTextManager::new(),
             popups: PopupManager::new(),
             margins: MarginManager::new(),
-            primary_cursor_line_number: LineNumber::Absolute(0), // Start at line 0
+            primary_cursor_line_number: LineNumber::Absolute(0),
             mode: "insert".to_string(),
             text_properties: TextPropertyManager::new(),
             show_cursors: true,
@@ -263,7 +261,7 @@ impl EditorState {
             is_composite_buffer: false,
             show_whitespace_tabs: true,
             use_tabs: false,
-            tab_size: 4, // Default tab size
+            tab_size: 4,
             reference_highlighter,
             view_mode: ViewMode::Source,
             debug_highlight_mode: false,
@@ -291,37 +289,24 @@ impl EditorState {
         large_file_threshold: usize,
         registry: &GrammarRegistry,
         languages: &std::collections::HashMap<String, crate::config::LanguageConfig>,
+        fs: Arc<dyn FileSystem + Send + Sync>,
     ) -> anyhow::Result<Self> {
-        let buffer = Buffer::load_from_file(path, large_file_threshold)?;
+        let buffer = Buffer::load_from_file(path, large_file_threshold, fs)?;
 
-        // Create highlighter using HighlightEngine with language config
         let highlighter = HighlightEngine::for_file_with_languages(path, registry, languages);
-        tracing::debug!(
-            "Created highlighter for {:?} (backend: {})",
-            path,
-            highlighter.backend_name()
-        );
 
-        // Initialize semantic highlighter with language if available
         let language = Language::from_path(path);
         let mut reference_highlighter = ReferenceHighlighter::new();
         let language_name = if let Some(lang) = &language {
             reference_highlighter.set_language(lang);
             lang.to_string()
         } else {
-            // Fall back to config-based detection for languages without tree-sitter support
-            // (e.g., YAML, TOML, etc.)
             crate::services::lsp::manager::detect_language(path, languages)
                 .unwrap_or_else(|| "text".to_string())
         };
 
-        // Initialize marker list with buffer size
         let mut marker_list = MarkerList::new();
         if !buffer.is_empty() {
-            tracing::debug!(
-                "Initializing marker list for file with {} bytes",
-                buffer.len()
-            );
             marker_list.adjust_for_insert(0, buffer.len());
         }
 
@@ -335,7 +320,7 @@ impl EditorState {
             virtual_texts: VirtualTextManager::new(),
             popups: PopupManager::new(),
             margins: MarginManager::new(),
-            primary_cursor_line_number: LineNumber::Absolute(0), // Start at line 0
+            primary_cursor_line_number: LineNumber::Absolute(0),
             mode: "insert".to_string(),
             text_properties: TextPropertyManager::new(),
             show_cursors: true,
@@ -343,7 +328,7 @@ impl EditorState {
             is_composite_buffer: false,
             show_whitespace_tabs: true,
             use_tabs: false,
-            tab_size: 4, // Default tab size
+            tab_size: 4,
             reference_highlighter,
             view_mode: ViewMode::Source,
             debug_highlight_mode: false,
@@ -847,7 +832,21 @@ fn convert_popup_data_to_popup(data: &PopupData) -> Popup {
         PopupPositionData::BottomRight => PopupPosition::BottomRight,
     };
 
+    // Determine popup kind based on title and content type
+    let completion_title = t!("lsp.popup_completion").to_string();
+    let kind = if data.title.as_ref() == Some(&completion_title) {
+        PopupKind::Completion
+    } else {
+        match &content {
+            PopupContent::List { .. } => PopupKind::List,
+            PopupContent::Text(_) => PopupKind::Text,
+            PopupContent::Markdown(_) => PopupKind::Text,
+            PopupContent::Custom(_) => PopupKind::Text,
+        }
+    };
+
     Popup {
+        kind,
         title: data.title.clone(),
         description: data.description.clone(),
         transient: data.transient,
@@ -859,6 +858,7 @@ fn convert_popup_data_to_popup(data: &PopupData) -> Popup {
         border_style: Style::default().fg(Color::Gray),
         background_style: Style::default().bg(Color::Rgb(30, 30, 30)),
         scroll_offset: 0,
+        text_selection: None,
     }
 }
 
@@ -1229,12 +1229,23 @@ pub struct SemanticTokenSpan {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use super::*;
     use crate::model::event::CursorId;
 
     #[test]
     fn test_state_new() {
-        let state = EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         assert!(state.buffer.is_empty());
         assert_eq!(state.cursors.count(), 1);
         assert_eq!(state.cursors.primary().position, 0);
@@ -1242,8 +1253,12 @@ mod tests {
 
     #[test]
     fn test_apply_insert() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         let cursor_id = state.cursors.primary_id();
 
         state.apply(&Event::Insert {
@@ -1259,8 +1274,12 @@ mod tests {
 
     #[test]
     fn test_apply_delete() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         let cursor_id = state.cursors.primary_id();
 
         // Insert then delete
@@ -1282,8 +1301,12 @@ mod tests {
 
     #[test]
     fn test_apply_move_cursor() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         let cursor_id = state.cursors.primary_id();
 
         state.apply(&Event::Insert {
@@ -1307,8 +1330,12 @@ mod tests {
 
     #[test]
     fn test_apply_add_cursor() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         let cursor_id = CursorId(1);
 
         state.apply(&Event::AddCursor {
@@ -1322,8 +1349,12 @@ mod tests {
 
     #[test]
     fn test_apply_many() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         let cursor_id = state.cursors.primary_id();
 
         let events = vec![
@@ -1346,8 +1377,12 @@ mod tests {
 
     #[test]
     fn test_cursor_adjustment_after_insert() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         let cursor_id = state.cursors.primary_id();
 
         // Add a second cursor at position 5
@@ -1377,8 +1412,12 @@ mod tests {
 
         #[test]
         fn test_capabilities_small_file() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("line1\nline2\nline3");
 
             let caps = state.capabilities();
@@ -1389,8 +1428,12 @@ mod tests {
 
         #[test]
         fn test_position_conversions() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello\nworld\ntest");
 
             // Test ByteOffset -> offset
@@ -1416,8 +1459,12 @@ mod tests {
 
         #[test]
         fn test_get_viewport_content() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("line1\nline2\nline3\nline4\nline5");
 
             let content = state
@@ -1433,8 +1480,12 @@ mod tests {
 
         #[test]
         fn test_get_range() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello world");
 
             let text = state
@@ -1456,8 +1507,12 @@ mod tests {
 
         #[test]
         fn test_get_line_content() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("line1\nline2\nline3");
 
             let line0 = state.get_line_content(0).unwrap();
@@ -1472,8 +1527,12 @@ mod tests {
 
         #[test]
         fn test_insert_delete() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello world");
 
             // Insert text
@@ -1495,8 +1554,12 @@ mod tests {
 
         #[test]
         fn test_replace() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello world");
 
             state
@@ -1511,8 +1574,12 @@ mod tests {
 
         #[test]
         fn test_find_matches() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello world hello");
 
             let matches = state.find_matches("hello", None).unwrap();
@@ -1523,8 +1590,12 @@ mod tests {
 
         #[test]
         fn test_prepare_for_render() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("line1\nline2\nline3\nline4\nline5");
 
             // Should not panic - pass top_byte=0 and height=24 (typical viewport params)
@@ -1533,8 +1604,12 @@ mod tests {
 
         #[test]
         fn test_helper_get_text_range() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello world");
 
             // Test normal range
@@ -1548,8 +1623,12 @@ mod tests {
 
         #[test]
         fn test_helper_get_line_at_offset() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("line1\nline2\nline3");
 
             // Get first line (offset 0)
@@ -1570,8 +1649,12 @@ mod tests {
 
         #[test]
         fn test_helper_get_text_to_end_of_line() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello world\nline2");
 
             // From beginning of line
@@ -1600,8 +1683,12 @@ mod tests {
 
         #[test]
         fn test_virtual_text_add_and_query() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello world");
 
             // Initialize marker list for buffer
@@ -1638,8 +1725,12 @@ mod tests {
 
         #[test]
         fn test_virtual_text_position_tracking_on_insert() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello world");
 
             // Initialize marker list for buffer
@@ -1674,8 +1765,12 @@ mod tests {
 
         #[test]
         fn test_virtual_text_position_tracking_on_delete() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("hello beautiful world");
 
             // Initialize marker list for buffer
@@ -1710,8 +1805,12 @@ mod tests {
 
         #[test]
         fn test_multiple_virtual_texts_with_priorities() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("let x = 5");
 
             // Initialize marker list for buffer
@@ -1751,8 +1850,12 @@ mod tests {
 
         #[test]
         fn test_virtual_text_clear() {
-            let mut state =
-                EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+            let mut state = EditorState::new(
+                80,
+                24,
+                crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+                test_fs(),
+            );
             state.buffer = Buffer::from_str_test("test");
 
             // Initialize marker list for buffer

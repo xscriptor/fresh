@@ -41,7 +41,7 @@ impl Editor {
 
         // Prepare persistent storage paths under the user's data directory
         let terminal_root = self.dir_context.terminal_dir_for(&self.working_dir);
-        let _ = std::fs::create_dir_all(&terminal_root);
+        let _ = self.filesystem.create_dir_all(&terminal_root);
         // Precompute paths using the next terminal ID so we capture from the first byte
         let predicted_terminal_id = self.terminal_manager.next_terminal_id();
         let log_path =
@@ -139,13 +139,16 @@ impl Editor {
             .cloned()
             .unwrap_or_else(|| {
                 let root = self.dir_context.terminal_dir_for(&self.working_dir);
-                let _ = std::fs::create_dir_all(&root);
+                let _ = self.filesystem.create_dir_all(&root);
                 root.join(format!("fresh-terminal-{}.txt", terminal_id.0))
             });
 
-        // Ensure the file exists
-        if let Err(e) = std::fs::write(&backing_file, "") {
-            tracing::warn!("Failed to create terminal backing file: {}", e);
+        // Ensure the file exists - but DON'T truncate if it already has content
+        // The PTY read loop may have already started writing scrollback
+        if !self.filesystem.exists(&backing_file) {
+            if let Err(e) = self.filesystem.write_file(&backing_file, &[]) {
+                tracing::warn!("Failed to create terminal backing file: {}", e);
+            }
         }
 
         // Store the backing file path
@@ -157,6 +160,7 @@ impl Editor {
             self.terminal_width,
             self.terminal_height,
             large_file_threshold,
+            std::sync::Arc::clone(&self.filesystem),
         );
         state.buffer.set_file_path(backing_file.clone());
         // Terminal buffers should never show line numbers
@@ -203,13 +207,13 @@ impl Editor {
             .cloned()
             .unwrap_or_else(|| {
                 let root = self.dir_context.terminal_dir_for(&self.working_dir);
-                let _ = std::fs::create_dir_all(&root);
+                let _ = self.filesystem.create_dir_all(&root);
                 root.join(format!("fresh-terminal-{}.txt", terminal_id.0))
             });
 
         // Create the file only if it doesn't exist (preserve existing scrollback for restore)
-        if !backing_file.exists() {
-            if let Err(e) = std::fs::write(&backing_file, "") {
+        if !self.filesystem.exists(&backing_file) {
+            if let Err(e) = self.filesystem.write_file(&backing_file, &[]) {
                 tracing::warn!("Failed to create terminal backing file: {}", e);
             }
         }
@@ -219,6 +223,7 @@ impl Editor {
             self.terminal_width,
             self.terminal_height,
             large_file_threshold,
+            std::sync::Arc::clone(&self.filesystem),
         );
         state.buffer.set_file_path(backing_file.clone());
         state.margins.set_line_numbers(false);
@@ -249,12 +254,12 @@ impl Editor {
             // Clean up backing/rendering file
             let backing_file = self.terminal_backing_files.remove(&terminal_id);
             if let Some(ref path) = backing_file {
-                let _ = std::fs::remove_file(path);
+                let _ = self.filesystem.remove_file(path);
             }
             // Clean up raw log file
             if let Some(log_file) = self.terminal_log_files.remove(&terminal_id) {
                 if backing_file.as_ref() != Some(&log_file) {
-                    let _ = std::fs::remove_file(&log_file);
+                    let _ = self.filesystem.remove_file(&log_file);
                 }
             }
 
@@ -414,20 +419,16 @@ impl Editor {
             // The scrollback has already been incrementally streamed by the PTY read loop
             if let Some(handle) = self.terminal_manager.get(terminal_id) {
                 if let Ok(mut state) = handle.state.lock() {
-                    // Open backing file in append mode to add visible screen
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&backing_file)
-                    {
-                        // Record the current file position as the history end point
-                        // (before appending visible screen) so we can truncate back to it
-                        if let Ok(metadata) = file.metadata() {
-                            state.set_backing_file_history_end(metadata.len());
-                        }
+                    // Record the current file size as the history end point
+                    // (before appending visible screen) so we can truncate back to it
+                    if let Ok(metadata) = self.filesystem.metadata(&backing_file) {
+                        state.set_backing_file_history_end(metadata.size);
+                    }
 
+                    // Open backing file in append mode to add visible screen
+                    if let Ok(mut file) = self.filesystem.open_file_for_append(&backing_file) {
                         use std::io::BufWriter;
-                        let mut writer = BufWriter::new(&mut file);
+                        let mut writer = BufWriter::new(&mut *file);
                         if let Err(e) = state.append_visible_screen(&mut writer) {
                             tracing::error!(
                                 "Failed to append visible screen to backing file: {}",
@@ -447,13 +448,13 @@ impl Editor {
                 large_file_threshold,
                 &self.grammar_registry,
                 &self.config.languages,
+                std::sync::Arc::clone(&self.filesystem),
             ) {
                 // Replace buffer state
                 if let Some(state) = self.buffers.get_mut(&buffer_id) {
                     *state = new_state;
                     // Move cursor to end of buffer
-                    let total = state.buffer.total_bytes();
-                    state.primary_cursor_mut().position = total;
+                    state.primary_cursor_mut().position = state.buffer.total_bytes();
                     // Terminal buffers should never be considered "modified"
                     state.buffer.set_modified(false);
                 }
@@ -520,15 +521,10 @@ impl Editor {
                             let truncate_pos = state.backing_file_history_end();
                             // Always truncate to remove appended visible screen
                             // (even if truncate_pos is 0, meaning no scrollback yet)
-                            if let Ok(file) =
-                                std::fs::OpenOptions::new().write(true).open(backing_path)
+                            if let Err(e) =
+                                self.filesystem.set_file_length(backing_path, truncate_pos)
                             {
-                                if let Err(e) = file.set_len(truncate_pos) {
-                                    tracing::warn!(
-                                        "Failed to truncate terminal backing file: {}",
-                                        e
-                                    );
-                                }
+                                tracing::warn!("Failed to truncate terminal backing file: {}", e);
                             }
                         }
                     }

@@ -51,6 +51,7 @@
             # Keep sublime-syntax grammar files (used by include_str! in grammar_registry.rs)
             (lib.fileset.fileFilter (file: file.hasExt "sublime-syntax") unfilteredRoot)
             # Runtime assets in crates/fresh-editor
+            ./crates/fresh-editor/docs
             ./crates/fresh-editor/keymaps
             ./crates/fresh-editor/locales
             ./crates/fresh-editor/plugins

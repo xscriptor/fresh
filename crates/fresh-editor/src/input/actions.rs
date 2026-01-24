@@ -2089,6 +2089,7 @@ pub fn action_to_events(
 
         // Actions that don't generate events
         Action::Quit
+        | Action::ForceQuit
         | Action::Save
         | Action::SaveAs
         | Action::Open
@@ -2274,6 +2275,7 @@ pub fn action_to_events(
         | Action::SettingsDecrement
         | Action::SetTabSize
         | Action::SetLineEnding
+        | Action::SetLanguage
         | Action::ToggleIndentationStyle
         | Action::ToggleTabIndicators
         | Action::ToggleDebugHighlights
@@ -2378,14 +2380,24 @@ pub fn action_to_events(
 
 #[cfg(test)]
 mod tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use super::*;
     use crate::model::event::{CursorId, Event};
     use crate::state::EditorState;
 
     #[test]
     fn test_backspace_deletes_newline() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert "Hello\nWorld"
         state.apply(&Event::Insert {
@@ -2425,8 +2437,12 @@ mod tests {
 
     #[test]
     fn test_move_down_basic() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert three lines
         state.apply(&Event::Insert {
@@ -2474,8 +2490,12 @@ mod tests {
 
     #[test]
     fn test_move_up_basic() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert three lines
         state.apply(&Event::Insert {
@@ -2530,8 +2550,12 @@ mod tests {
 
     #[test]
     fn test_move_down_preserves_column() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert lines with different lengths
         state.apply(&Event::Insert {
@@ -2596,8 +2620,12 @@ mod tests {
 
     #[test]
     fn test_move_up_preserves_column() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert lines with different lengths
         state.apply(&Event::Insert {
@@ -2662,8 +2690,12 @@ mod tests {
 
     #[test]
     fn test_move_down_at_line_start() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert two lines
         state.apply(&Event::Insert {
@@ -2696,8 +2728,12 @@ mod tests {
 
     #[test]
     fn test_move_up_at_line_start() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert two lines
         state.apply(&Event::Insert {
@@ -2733,8 +2769,12 @@ mod tests {
 
     #[test]
     fn test_move_down_with_empty_lines() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert lines with empty line in middle
         state.apply(&Event::Insert {
@@ -2771,8 +2811,12 @@ mod tests {
 
     #[test]
     fn test_column_calculation_doesnt_underflow() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert a single line
         state.apply(&Event::Insert {
@@ -2813,8 +2857,12 @@ mod tests {
     fn test_line_iterator_positioning_for_cursor_movement() {
         // This test verifies the behavior of line_iterator when positioning at different offsets
         // to understand how column calculation works
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         state.apply(&Event::Insert {
             position: 0,
@@ -2883,8 +2931,12 @@ mod tests {
     #[test]
     fn test_move_line_end_positioning() {
         // Test where MoveLineEnd actually puts the cursor
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         state.apply(&Event::Insert {
             position: 0,
@@ -2926,8 +2978,12 @@ mod tests {
     #[test]
     fn test_move_line_start_from_eof() {
         // Test MoveLineStart when cursor is at EOF (beyond last character)
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         state.apply(&Event::Insert {
             position: 0,
@@ -2986,10 +3042,11 @@ mod tests {
         // Use a VERY SMALL threshold (500 bytes) to force lazy loading behavior
         // This ensures chunks won't all be loaded at once
         let large_file_threshold = 500;
-        let buffer = TextBuffer::load_from_file(&test_file, large_file_threshold).unwrap();
+        let buffer =
+            TextBuffer::load_from_file(&test_file, large_file_threshold, test_fs()).unwrap();
 
         // Create editor state with the loaded buffer
-        let mut state = EditorState::new(80, 24, large_file_threshold);
+        let mut state = EditorState::new(80, 24, large_file_threshold, test_fs());
         state.buffer = buffer;
 
         // Move cursor to near the end (line 90)
@@ -3038,8 +3095,12 @@ mod tests {
     #[test]
     fn test_move_down_from_newline_position() {
         // Test moving down when cursor is ON a newline character
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert "HelloNew Line\nWorld!"
         state.apply(&Event::Insert {
@@ -3100,8 +3161,12 @@ mod tests {
     #[test]
     fn test_move_down_then_home_backspace() {
         // Reproduce the e2e test failure scenario
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert "HelloNew Line\nWorld!"
         state.apply(&Event::Insert {
@@ -3188,8 +3253,12 @@ mod tests {
 
     #[test]
     fn test_bracket_auto_close_parenthesis() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Cursor is at position 0 initially
         assert_eq!(state.cursors.primary().position, 0);
@@ -3217,8 +3286,12 @@ mod tests {
 
     #[test]
     fn test_bracket_auto_close_curly_brace() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert opening curly brace with auto_indent=true
         let events =
@@ -3238,8 +3311,12 @@ mod tests {
 
     #[test]
     fn test_bracket_auto_close_square_bracket() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert opening square bracket
         let events =
@@ -3255,8 +3332,12 @@ mod tests {
 
     #[test]
     fn test_bracket_auto_close_double_quote() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         state.language = "rust".to_string();
 
         // Insert double quote
@@ -3273,8 +3354,12 @@ mod tests {
 
     #[test]
     fn test_bracket_auto_close_disabled_when_auto_indent_false() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert opening parenthesis with auto_indent=false
         let events =
@@ -3291,8 +3376,12 @@ mod tests {
 
     #[test]
     fn test_bracket_auto_close_not_before_alphanumeric() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert "abc"
         state.apply(&Event::Insert {
@@ -3327,8 +3416,12 @@ mod tests {
 
     #[test]
     fn test_bracket_auto_close_multiple_cursors() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert some text
         state.apply(&Event::Insert {
@@ -3380,8 +3473,12 @@ mod tests {
     #[test]
     fn test_bracket_auto_close_multiple_cursors_with_skip_over() {
         // Test case: type 'foo()' with multiple cursors - the closing paren should skip over
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Start with two empty lines
         state.apply(&Event::Insert {
@@ -3481,8 +3578,12 @@ mod tests {
     fn test_bracket_auto_close_three_cursors_with_skip_over() {
         // Test case: type 'foo()' with THREE cursors - the closing paren should skip over
         // This tests the bug where skip-over fails with 3+ cursors
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Start with three empty lines
         state.apply(&Event::Insert {
@@ -3576,8 +3677,12 @@ mod tests {
 
     #[test]
     fn test_auto_pair_deletion_parenthesis() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert "()"
         state.apply(&Event::Insert {
@@ -3613,8 +3718,12 @@ mod tests {
 
     #[test]
     fn test_auto_pair_deletion_curly_brace() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert "{}"
         state.apply(&Event::Insert {
@@ -3646,8 +3755,12 @@ mod tests {
 
     #[test]
     fn test_auto_pair_deletion_double_quote() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert empty string literal
         state.apply(&Event::Insert {
@@ -3679,8 +3792,12 @@ mod tests {
 
     #[test]
     fn test_auto_pair_deletion_disabled_when_auto_indent_false() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert "()"
         state.apply(&Event::Insert {
@@ -3714,8 +3831,12 @@ mod tests {
 
     #[test]
     fn test_auto_pair_deletion_not_matching() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert "(]" - not a matching pair
         state.apply(&Event::Insert {
@@ -3748,8 +3869,12 @@ mod tests {
 
     #[test]
     fn test_auto_pair_deletion_with_content() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
 
         // Insert "(abc)" - has content between brackets
         state.apply(&Event::Insert {
@@ -3782,6 +3907,13 @@ mod tests {
 
 #[cfg(test)]
 mod property_tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
+
     use super::*;
     use proptest::prelude::*;
 
@@ -3805,7 +3937,7 @@ mod property_tests {
                 return Ok(());
             }
 
-            let mut buffer = Buffer::from_bytes(text.clone());
+            let mut buffer = Buffer::from_bytes(text.clone(), test_fs());
             let buffer_len = buffer.len();
 
             // Convert fractions to positions, ensuring start <= end
@@ -3883,7 +4015,7 @@ mod property_tests {
                 return Ok(());
             }
 
-            let mut buffer = Buffer::from_bytes(text.clone());
+            let mut buffer = Buffer::from_bytes(text.clone(), test_fs());
             let buffer_len = buffer.len();
 
             // Edge case 1: start_pos == end_pos (single position range)
@@ -3917,7 +4049,7 @@ mod property_tests {
                 return Ok(());
             }
 
-            let mut buffer = Buffer::from_bytes(text.as_bytes().to_vec());
+            let mut buffer = Buffer::from_bytes(text.as_bytes().to_vec(), test_fs());
             let buffer_len = buffer.len();
 
             let line_starts = collect_line_starts(&mut buffer, 0, buffer_len, 80);

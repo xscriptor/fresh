@@ -1922,7 +1922,7 @@ fn test_lsp_typing_performance_with_many_diagnostics() -> anyhow::Result<()> {
     fresh::services::lsp::diagnostics::apply_diagnostics_to_state(
         state,
         &diag_params.diagnostics,
-        &fresh::view::theme::Theme::from_name(theme::THEME_DARK).unwrap(),
+        &fresh::view::theme::Theme::load_builtin(theme::THEME_DARK).unwrap(),
     );
 
     let apply_duration = start.elapsed();
@@ -1958,7 +1958,7 @@ fn test_lsp_typing_performance_with_many_diagnostics() -> anyhow::Result<()> {
         fresh::services::lsp::diagnostics::apply_diagnostics_to_state_cached(
             state,
             &diag_params.diagnostics,
-            &fresh::view::theme::Theme::from_name(theme::THEME_DARK).unwrap(),
+            &fresh::view::theme::Theme::load_builtin(theme::THEME_DARK).unwrap(),
         );
         let reapply_duration = start.elapsed();
         total_reapply_time += reapply_duration;
@@ -4859,6 +4859,148 @@ fn test_completion_type_to_filter_basic() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Test type-to-filter with uppercase letters (Shift modifier)
+/// This verifies that uppercase letters can be typed to filter completions
+#[test]
+fn test_completion_type_to_filter_uppercase() -> anyhow::Result<()> {
+    use fresh::model::event::{
+        Event, PopupContentData, PopupData, PopupListItemData, PopupPositionData,
+    };
+
+    let mut harness = EditorTestHarness::new(80, 24)?;
+
+    // Type initial prefix
+    harness.type_text("Console.")?;
+    harness.render()?;
+
+    // Set up completion items (simulating C# Console methods)
+    let completion_items = vec![
+        lsp_types::CompletionItem {
+            label: "WriteLine".to_string(),
+            kind: Some(lsp_types::CompletionItemKind::METHOD),
+            detail: Some("void Console.WriteLine()".to_string()),
+            insert_text: Some("WriteLine".to_string()),
+            ..Default::default()
+        },
+        lsp_types::CompletionItem {
+            label: "Write".to_string(),
+            kind: Some(lsp_types::CompletionItemKind::METHOD),
+            detail: Some("void Console.Write()".to_string()),
+            insert_text: Some("Write".to_string()),
+            ..Default::default()
+        },
+        lsp_types::CompletionItem {
+            label: "ReadLine".to_string(),
+            kind: Some(lsp_types::CompletionItemKind::METHOD),
+            detail: Some("string Console.ReadLine()".to_string()),
+            insert_text: Some("ReadLine".to_string()),
+            ..Default::default()
+        },
+    ];
+
+    // Store completion items for re-filtering
+    harness.editor_mut().set_completion_items(completion_items);
+
+    // Show completion popup with all items
+    let state = harness.editor_mut().active_state_mut();
+    state.apply(&Event::ShowPopup {
+        popup: PopupData {
+            title: Some("Completion".to_string()),
+            description: None,
+            transient: false,
+            content: PopupContentData::List {
+                items: vec![
+                    PopupListItemData {
+                        text: "WriteLine".to_string(),
+                        detail: Some("void Console.WriteLine()".to_string()),
+                        icon: Some("λ".to_string()),
+                        data: Some("WriteLine".to_string()),
+                    },
+                    PopupListItemData {
+                        text: "Write".to_string(),
+                        detail: Some("void Console.Write()".to_string()),
+                        icon: Some("λ".to_string()),
+                        data: Some("Write".to_string()),
+                    },
+                    PopupListItemData {
+                        text: "ReadLine".to_string(),
+                        detail: Some("string Console.ReadLine()".to_string()),
+                        icon: Some("λ".to_string()),
+                        data: Some("ReadLine".to_string()),
+                    },
+                ],
+                selected: 0,
+            },
+            position: PopupPositionData::BelowCursor,
+            width: 50,
+            max_height: 15,
+            bordered: true,
+        },
+    });
+
+    harness.render()?;
+
+    // Verify all items are visible initially
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("WriteLine"),
+        "WriteLine should be visible initially"
+    );
+    assert!(
+        screen.contains("ReadLine"),
+        "ReadLine should be visible initially"
+    );
+
+    // Type uppercase 'W' (with SHIFT modifier) to filter - should filter out ReadLine
+    harness.send_key(KeyCode::Char('W'), KeyModifiers::SHIFT)?;
+    harness.render()?;
+
+    // Verify buffer contains the typed character
+    let buffer = harness.get_buffer_content().unwrap();
+    assert_eq!(buffer, "Console.W", "Buffer should contain 'Console.W'");
+
+    // Verify popup is still visible with filtered items
+    assert!(
+        harness.editor().active_state().popups.is_visible(),
+        "Popup should still be visible after typing uppercase letter"
+    );
+
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("WriteLine"),
+        "WriteLine should still be visible after typing 'W'"
+    );
+    assert!(
+        screen.contains("Write"),
+        "Write should still be visible after typing 'W'"
+    );
+    // ReadLine should be filtered out since it doesn't start with W
+    assert!(
+        !screen.contains("ReadLine"),
+        "ReadLine should be filtered out after typing 'W'"
+    );
+
+    // Type another uppercase letter to narrow down further
+    harness.send_key(KeyCode::Char('r'), KeyModifiers::NONE)?;
+    harness.render()?;
+
+    let buffer = harness.get_buffer_content().unwrap();
+    assert_eq!(buffer, "Console.Wr", "Buffer should contain 'Console.Wr'");
+
+    // Both Write and WriteLine start with "Wr", so both should be visible
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("WriteLine"),
+        "WriteLine should still be visible after typing 'Wr'"
+    );
+    assert!(
+        screen.contains("Write"),
+        "Write should still be visible after typing 'Wr'"
+    );
+
+    Ok(())
+}
+
 /// Test type-to-filter: popup closes when no items match
 #[test]
 fn test_completion_type_to_filter_closes_on_no_match() -> anyhow::Result<()> {
@@ -5135,6 +5277,169 @@ fn test_completion_type_to_filter_preserves_selection() -> anyhow::Result<()> {
         selected_after,
         Some("test_beta".to_string()),
         "Selection should be preserved after filtering"
+    );
+
+    Ok(())
+}
+
+/// Test accept_suggestion_on_enter: "off" makes Enter insert newline instead of accepting
+#[test]
+fn test_completion_accept_on_enter_off() -> anyhow::Result<()> {
+    use fresh::config::AcceptSuggestionOnEnter;
+    use fresh::model::event::{
+        Event, PopupContentData, PopupData, PopupListItemData, PopupPositionData,
+    };
+
+    // Configure accept_suggestion_on_enter to "off"
+    let mut config = fresh::config::Config::default();
+    config.editor.accept_suggestion_on_enter = AcceptSuggestionOnEnter::Off;
+    let mut harness = EditorTestHarness::with_config(80, 24, config)?;
+
+    // Type initial text
+    harness.type_text("test")?;
+    harness.render()?;
+
+    // Set up completion items
+    let completion_items = vec![lsp_types::CompletionItem {
+        label: "test_function".to_string(),
+        kind: Some(lsp_types::CompletionItemKind::FUNCTION),
+        insert_text: Some("test_function".to_string()),
+        ..Default::default()
+    }];
+
+    harness.editor_mut().set_completion_items(completion_items);
+
+    // Show completion popup
+    let state = harness.editor_mut().active_state_mut();
+    state.apply(&Event::ShowPopup {
+        popup: PopupData {
+            title: Some("Completion".to_string()),
+            description: None,
+            transient: false,
+            content: PopupContentData::List {
+                items: vec![PopupListItemData {
+                    text: "test_function".to_string(),
+                    detail: None,
+                    icon: Some("λ".to_string()),
+                    data: Some("test_function".to_string()),
+                }],
+                selected: 0,
+            },
+            position: PopupPositionData::BelowCursor,
+            width: 50,
+            max_height: 15,
+            bordered: true,
+        },
+    });
+
+    harness.render()?;
+
+    // Verify popup is visible
+    assert!(
+        harness.editor().active_state().popups.is_visible(),
+        "Popup should be visible"
+    );
+
+    // Press Enter - should close popup and insert newline, NOT accept completion
+    harness.send_key(KeyCode::Enter, KeyModifiers::NONE)?;
+    harness.render()?;
+
+    // Verify popup is closed
+    assert!(
+        !harness.editor().active_state().popups.is_visible(),
+        "Popup should be closed after Enter with accept_on_enter=off"
+    );
+
+    // Verify buffer contains original text + newline, NOT the completion
+    let buffer = harness.get_buffer_content().unwrap();
+    assert!(
+        buffer.contains("test\n"),
+        "Buffer should contain 'test' followed by newline, got: {:?}",
+        buffer
+    );
+    assert!(
+        !buffer.contains("test_function"),
+        "Buffer should NOT contain completion 'test_function', got: {:?}",
+        buffer
+    );
+
+    Ok(())
+}
+
+/// Test accept_suggestion_on_enter: "on" (default) makes Enter accept completion
+#[test]
+fn test_completion_accept_on_enter_on() -> anyhow::Result<()> {
+    use fresh::config::AcceptSuggestionOnEnter;
+    use fresh::model::event::{
+        Event, PopupContentData, PopupData, PopupListItemData, PopupPositionData,
+    };
+
+    // Ensure accept_suggestion_on_enter is "on" (default)
+    let mut config = fresh::config::Config::default();
+    config.editor.accept_suggestion_on_enter = AcceptSuggestionOnEnter::On;
+    let mut harness = EditorTestHarness::with_config(80, 24, config)?;
+
+    // Type initial text
+    harness.type_text("test")?;
+    harness.render()?;
+
+    // Set up completion items
+    let completion_items = vec![lsp_types::CompletionItem {
+        label: "test_function".to_string(),
+        kind: Some(lsp_types::CompletionItemKind::FUNCTION),
+        insert_text: Some("test_function".to_string()),
+        ..Default::default()
+    }];
+
+    harness.editor_mut().set_completion_items(completion_items);
+
+    // Show completion popup
+    let state = harness.editor_mut().active_state_mut();
+    state.apply(&Event::ShowPopup {
+        popup: PopupData {
+            title: Some("Completion".to_string()),
+            description: None,
+            transient: false,
+            content: PopupContentData::List {
+                items: vec![PopupListItemData {
+                    text: "test_function".to_string(),
+                    detail: None,
+                    icon: Some("λ".to_string()),
+                    data: Some("test_function".to_string()),
+                }],
+                selected: 0,
+            },
+            position: PopupPositionData::BelowCursor,
+            width: 50,
+            max_height: 15,
+            bordered: true,
+        },
+    });
+
+    harness.render()?;
+
+    // Verify popup is visible
+    assert!(
+        harness.editor().active_state().popups.is_visible(),
+        "Popup should be visible"
+    );
+
+    // Press Enter - should accept completion
+    harness.send_key(KeyCode::Enter, KeyModifiers::NONE)?;
+    harness.render()?;
+
+    // Verify popup is closed
+    assert!(
+        !harness.editor().active_state().popups.is_visible(),
+        "Popup should be closed after Enter"
+    );
+
+    // Verify buffer contains the completion
+    let buffer = harness.get_buffer_content().unwrap();
+    assert!(
+        buffer.contains("test_function"),
+        "Buffer should contain completion 'test_function', got: {:?}",
+        buffer
     );
 
     Ok(())
@@ -6312,6 +6617,420 @@ fn test_hover_no_duplicate_popup_when_moving_within_symbol() -> anyhow::Result<(
         corners.2,
         corners.3,
         screen
+    );
+
+    Ok(())
+}
+
+/// Test that clicking outside a hover popup dismisses it and doesn't move the cursor
+///
+/// This is a regression test for a bug where:
+/// 1. Click outside hover popup should dismiss the popup
+/// 2. Click inside hover popup should NOT move the editor cursor
+/// 3. Double-click should also respect these rules
+#[test]
+fn test_hover_popup_click_dismissal() -> anyhow::Result<()> {
+    use fresh::model::event::{Event, PopupContentData, PopupData, PopupPositionData};
+
+    let mut harness = EditorTestHarness::new(80, 24)?;
+
+    // Type some text on multiple lines to have different click targets
+    harness.type_text("line one\nline two\nline three")?;
+    harness.render()?;
+
+    // Move cursor to beginning of line 1
+    harness.send_key(KeyCode::Home, KeyModifiers::CONTROL)?;
+    harness.render()?;
+
+    // Record initial cursor position (currently unused but kept for future assertions)
+    let _initial_cursor = harness.cursor_position();
+
+    // Show a transient hover popup (simulating LSP hover response)
+    let state = harness.editor_mut().active_state_mut();
+    state.apply(&Event::ShowPopup {
+        popup: PopupData {
+            title: Some("Hover Info".to_string()),
+            description: None,
+            transient: true, // This is key - hover popups are transient
+            content: PopupContentData::Text(vec![
+                "fn example() -> i32".to_string(),
+                "Returns an example value".to_string(),
+            ]),
+            position: PopupPositionData::Fixed { x: 20, y: 5 },
+            width: 30,
+            max_height: 10,
+            bordered: true,
+        },
+    });
+    harness.render()?;
+
+    // Verify popup is visible
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("Hover Info"),
+        "Hover popup should be visible. Screen:\n{screen}"
+    );
+
+    // Click OUTSIDE the popup (at row 15, which is below the popup at y=5)
+    // This should dismiss the popup
+    harness.mouse_click(5, 15)?;
+
+    // Verify popup is dismissed
+    let screen_after_click = harness.screen_to_string();
+    assert!(
+        !screen_after_click.contains("Hover Info"),
+        "Hover popup should be dismissed after clicking outside. Screen:\n{screen_after_click}"
+    );
+
+    Ok(())
+}
+
+/// Test that clicking inside a hover popup does NOT move the editor cursor
+#[test]
+fn test_hover_popup_click_inside_does_not_move_cursor() -> anyhow::Result<()> {
+    use fresh::model::event::{Event, PopupContentData, PopupData, PopupPositionData};
+
+    let mut harness = EditorTestHarness::new(80, 24)?;
+
+    // Type some text
+    harness.type_text("line one\nline two\nline three")?;
+    harness.render()?;
+
+    // Move cursor to a known position (beginning of file)
+    harness.send_key(KeyCode::Home, KeyModifiers::CONTROL)?;
+    harness.render()?;
+
+    let cursor_before = harness.cursor_position();
+
+    // Show a hover popup at a fixed position
+    let state = harness.editor_mut().active_state_mut();
+    state.apply(&Event::ShowPopup {
+        popup: PopupData {
+            title: Some("Hover Info".to_string()),
+            description: None,
+            transient: true,
+            content: PopupContentData::Text(vec![
+                "fn example() -> i32".to_string(),
+                "Returns an example value".to_string(),
+                "More documentation here".to_string(),
+            ]),
+            // Position the popup in the middle of the screen
+            position: PopupPositionData::Fixed { x: 10, y: 5 },
+            width: 40,
+            max_height: 10,
+            bordered: true,
+        },
+    });
+    harness.render()?;
+
+    // Verify popup is visible
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("Hover Info"),
+        "Hover popup should be visible"
+    );
+
+    // Click INSIDE the popup (at position within the popup bounds)
+    // Popup is at x=10, y=5, width=40, so clicking at (25, 7) should be inside
+    harness.mouse_click(25, 7)?;
+
+    // Cursor should NOT have moved
+    let cursor_after = harness.cursor_position();
+    assert_eq!(
+        cursor_before, cursor_after,
+        "Cursor should not move when clicking inside hover popup. \
+         Before: {:?}, After: {:?}",
+        cursor_before, cursor_after
+    );
+
+    // Popup should still be visible (clicking inside doesn't dismiss)
+    let screen_after = harness.screen_to_string();
+    assert!(
+        screen_after.contains("Hover Info"),
+        "Hover popup should still be visible after clicking inside"
+    );
+
+    Ok(())
+}
+
+/// Test that double-clicking outside hover popup dismisses it
+#[test]
+fn test_hover_popup_double_click_dismissal() -> anyhow::Result<()> {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use fresh::model::event::{Event, PopupContentData, PopupData, PopupPositionData};
+
+    let mut harness = EditorTestHarness::new(80, 24)?;
+
+    // Type some text
+    harness.type_text("hello world on line one")?;
+    harness.render()?;
+
+    // Show a transient hover popup
+    let state = harness.editor_mut().active_state_mut();
+    state.apply(&Event::ShowPopup {
+        popup: PopupData {
+            title: Some("Hover Info".to_string()),
+            description: None,
+            transient: true,
+            content: PopupContentData::Text(vec!["Test hover content".to_string()]),
+            position: PopupPositionData::Fixed { x: 30, y: 5 },
+            width: 30,
+            max_height: 10,
+            bordered: true,
+        },
+    });
+    harness.render()?;
+
+    // Verify popup is visible
+    assert!(
+        harness.screen_to_string().contains("Hover Info"),
+        "Hover popup should be visible"
+    );
+
+    // Simulate double-click OUTSIDE the popup by sending two quick clicks
+    // The harness double-click detection is time-based, so we send clicks in quick succession
+    let click_col = 5_u16;
+    let click_row = 15_u16; // Below the popup
+
+    // First click
+    harness.send_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: click_col,
+        row: click_row,
+        modifiers: KeyModifiers::empty(),
+    })?;
+    harness.send_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: click_col,
+        row: click_row,
+        modifiers: KeyModifiers::empty(),
+    })?;
+
+    // Second click (double-click)
+    harness.send_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: click_col,
+        row: click_row,
+        modifiers: KeyModifiers::empty(),
+    })?;
+    harness.send_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: click_col,
+        row: click_row,
+        modifiers: KeyModifiers::empty(),
+    })?;
+    harness.render()?;
+
+    // Popup should be dismissed after the double-click
+    let screen = harness.screen_to_string();
+    assert!(
+        !screen.contains("Hover Info"),
+        "Hover popup should be dismissed after double-clicking outside. Screen:\n{screen}"
+    );
+
+    Ok(())
+}
+
+/// Test that double-clicking inside hover popup does not affect editor
+#[test]
+fn test_hover_popup_double_click_inside_blocked() -> anyhow::Result<()> {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use fresh::model::event::{Event, PopupContentData, PopupData, PopupPositionData};
+
+    let mut harness = EditorTestHarness::new(80, 24)?;
+
+    // Type some text with a word that could be selected by double-click
+    harness.type_text("hello world")?;
+    harness.render()?;
+
+    // Move cursor to start
+    harness.send_key(KeyCode::Home, KeyModifiers::CONTROL)?;
+    harness.render()?;
+
+    let cursor_before = harness.cursor_position();
+
+    // Show a hover popup positioned over the text
+    let state = harness.editor_mut().active_state_mut();
+    state.apply(&Event::ShowPopup {
+        popup: PopupData {
+            title: Some("Hover".to_string()),
+            description: None,
+            transient: true,
+            content: PopupContentData::Text(vec!["Documentation".to_string()]),
+            // Position popup to overlap with text area
+            position: PopupPositionData::Fixed { x: 1, y: 2 },
+            width: 30,
+            max_height: 5,
+            bordered: true,
+        },
+    });
+    harness.render()?;
+
+    // Double-click inside the popup
+    let click_col = 10_u16; // Inside popup
+    let click_row = 3_u16; // Inside popup (popup is at y=2, height includes border)
+
+    // First click
+    harness.send_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: click_col,
+        row: click_row,
+        modifiers: KeyModifiers::empty(),
+    })?;
+    harness.send_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: click_col,
+        row: click_row,
+        modifiers: KeyModifiers::empty(),
+    })?;
+
+    // Second click (double-click)
+    harness.send_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: click_col,
+        row: click_row,
+        modifiers: KeyModifiers::empty(),
+    })?;
+    harness.send_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: click_col,
+        row: click_row,
+        modifiers: KeyModifiers::empty(),
+    })?;
+    harness.render()?;
+
+    // Cursor should not have moved (double-click should not select word in editor)
+    let cursor_after = harness.cursor_position();
+    assert_eq!(
+        cursor_before, cursor_after,
+        "Cursor should not move when double-clicking inside hover popup"
+    );
+
+    // Popup should still be visible
+    assert!(
+        harness.screen_to_string().contains("Hover"),
+        "Popup should still be visible after double-clicking inside"
+    );
+
+    Ok(())
+}
+
+/// Test that hover popup can scroll all the way to the bottom
+///
+/// This test verifies that when scrolling a hover popup with large content,
+/// the user can scroll all the way to see the last line of content.
+#[test]
+fn test_hover_popup_scroll_to_bottom() -> anyhow::Result<()> {
+    use fresh::model::event::{Event, PopupContentData, PopupData, PopupPositionData};
+
+    let mut harness = EditorTestHarness::new(100, 30)?;
+
+    // Create markdown-like content similar to real LSP hover documentation
+    // This simulates a function signature with extensive documentation
+    let mut long_content: Vec<String> = vec![
+        "```rust".to_string(),
+        "pub fn process_data(".to_string(),
+        "    input: &[u8],".to_string(),
+        "    options: ProcessOptions,".to_string(),
+        ") -> Result<Output, Error>".to_string(),
+        "```".to_string(),
+        "".to_string(),
+        "# Description".to_string(),
+        "".to_string(),
+        "Processes the input data according to the specified options.".to_string(),
+        "This function performs several transformations on the data.".to_string(),
+        "".to_string(),
+        "# Arguments".to_string(),
+        "".to_string(),
+        "* `input` - The raw input bytes to process".to_string(),
+        "* `options` - Configuration options for processing".to_string(),
+        "".to_string(),
+        "# Returns".to_string(),
+        "".to_string(),
+        "Returns `Ok(Output)` on success, or `Err(Error)` if processing fails.".to_string(),
+        "".to_string(),
+        "# Examples".to_string(),
+        "".to_string(),
+        "```rust".to_string(),
+        "let data = b\"hello world\";".to_string(),
+        "let opts = ProcessOptions::default();".to_string(),
+        "let result = process_data(data, opts)?;".to_string(),
+        "```".to_string(),
+        "".to_string(),
+        "# Errors".to_string(),
+        "".to_string(),
+        "This function will return an error if:".to_string(),
+        "".to_string(),
+        "* The input is empty".to_string(),
+        "* The input contains invalid UTF-8 sequences".to_string(),
+        "* The options specify an unsupported encoding".to_string(),
+        "".to_string(),
+        "# Performance".to_string(),
+        "".to_string(),
+        "This function has O(n) time complexity where n is the input length.".to_string(),
+        "Memory usage is proportional to the input size.".to_string(),
+        "".to_string(),
+        "# Safety".to_string(),
+        "".to_string(),
+        "This function is safe to call from multiple threads.".to_string(),
+        "".to_string(),
+        "# See Also".to_string(),
+        "".to_string(),
+        "* [`process_data_async`] - Async version of this function".to_string(),
+        "* [`ProcessOptions`] - Configuration options".to_string(),
+        "".to_string(),
+    ];
+
+    // Add numbered lines at the end so we can verify scrolling reached the bottom
+    for i in 1..=100 {
+        long_content.push(format!("CONTENT_LINE_{:03}", i));
+    }
+    long_content.push("=== END OF DOCUMENTATION ===".to_string());
+
+    let state = harness.editor_mut().active_state_mut();
+    state.apply(&Event::ShowPopup {
+        popup: PopupData {
+            title: Some("Hover Info".to_string()),
+            description: None,
+            transient: true,
+            content: PopupContentData::Text(long_content),
+            position: PopupPositionData::Centered,
+            width: 60,
+            max_height: 12, // Only 10 lines visible after borders
+            bordered: true,
+        },
+    });
+
+    harness.render()?;
+
+    // Verify initial state - first lines visible, last lines not
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("pub fn process_data"),
+        "First line should be visible initially. Screen:\n{screen}"
+    );
+    assert!(
+        !screen.contains("END OF DOCUMENTATION"),
+        "Last line should not be visible initially. Screen:\n{screen}"
+    );
+
+    // Scroll down many times to reach the bottom
+    // Content is ~150 lines, visible is ~10, so need ~140+ scroll events
+    for _ in 0..200 {
+        harness.mouse_scroll_down(50, 15)?;
+        harness.render()?;
+    }
+
+    // After scrolling to bottom, the last line should be visible
+    let screen_after = harness.screen_to_string();
+    assert!(
+        screen_after.contains("END OF DOCUMENTATION"),
+        "Last line should be visible after scrolling to bottom. Screen:\n{screen_after}"
+    );
+    // First line should no longer be visible
+    assert!(
+        !screen_after.contains("pub fn process_data"),
+        "First line should not be visible after scrolling to bottom. Screen:\n{screen_after}"
     );
 
     Ok(())

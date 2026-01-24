@@ -458,7 +458,7 @@ editor.registerCommand(
   "%cmd.refresh",
   "%cmd.refresh_desc",
   "git_gutter_refresh",
-  "normal"
+  null
 );
 
 // Initialize for the current buffer
@@ -474,4 +474,3 @@ if (initPath && initPath !== "") {
 }
 
 editor.debug("Git Gutter plugin loaded");
-editor.setStatus(editor.t("status.ready"));

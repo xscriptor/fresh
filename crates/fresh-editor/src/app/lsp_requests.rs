@@ -404,13 +404,14 @@ impl Editor {
     }
 
     /// Check if the inserted character should trigger completion
-    /// and if so, request completion automatically.
+    /// and if so, request completion automatically (possibly after a delay).
     ///
     /// Triggers completion in two cases:
-    /// 1. Always: when the character is an LSP trigger character (like `.`, `::`, etc.)
-    /// 2. When quick_suggestions is enabled: when the character is a word character (alphanumeric or `_`)
+    /// 1. Trigger characters (like `.`, `::`, etc.): immediate if suggest_on_trigger_characters is enabled
+    /// 2. Word characters: delayed by quick_suggestions_delay_ms if quick_suggestions is enabled
     ///
-    /// This provides VS Code-like behavior where suggestions appear while typing.
+    /// This provides VS Code-like behavior where suggestions appear while typing,
+    /// with debouncing to avoid spamming the LSP server.
     pub(crate) fn maybe_trigger_completion(&mut self, c: char) {
         // Get the active buffer's file path and detect its language
         let path = match self.active_state().buffer.file_path() {
@@ -432,23 +433,37 @@ impl Editor {
 
         // Check if quick suggestions is enabled and this is a word character
         let quick_suggestions_enabled = self.config.editor.quick_suggestions;
+        let suggest_on_trigger_chars = self.config.editor.suggest_on_trigger_characters;
         let is_word_char = c.is_alphanumeric() || c == '_';
 
-        // Trigger completion if:
-        // 1. It's an LSP trigger character (always), OR
-        // 2. Quick suggestions is enabled AND it's a word character
-        let should_trigger = is_lsp_trigger || (quick_suggestions_enabled && is_word_char);
-
-        if should_trigger {
+        // Case 1: Trigger character - immediate trigger (bypasses delay)
+        if is_lsp_trigger && suggest_on_trigger_chars {
             tracing::debug!(
-                "Character '{}' triggered completion for language {} (lsp_trigger={}, word_char={}, quick_suggestions={})",
+                "Trigger character '{}' immediately triggers completion for language {}",
                 c,
-                language,
-                is_lsp_trigger,
-                is_word_char,
-                quick_suggestions_enabled
+                language
             );
+            // Cancel any pending scheduled trigger
+            self.scheduled_completion_trigger = None;
             let _ = self.request_completion();
+            return;
+        }
+
+        // Case 2: Word character with quick suggestions - schedule delayed trigger
+        if quick_suggestions_enabled && is_word_char {
+            let delay_ms = self.config.editor.quick_suggestions_delay_ms;
+            let trigger_time = Instant::now() + Duration::from_millis(delay_ms);
+
+            tracing::debug!(
+                "Scheduling completion trigger in {}ms for language {} (char '{}')",
+                delay_ms,
+                language,
+                c
+            );
+
+            // Schedule (or reschedule) the completion trigger
+            // This effectively debounces - each keystroke resets the timer
+            self.scheduled_completion_trigger = Some(trigger_time);
         }
     }
 
@@ -608,6 +623,13 @@ impl Editor {
             self.hover_symbol_range = None;
             return;
         }
+
+        // Debug: log raw hover content to diagnose formatting issues
+        tracing::debug!(
+            "LSP hover content (markdown={}):\n{}",
+            is_markdown,
+            contents
+        );
 
         // Convert LSP range to byte offsets for highlighting
         if let Some(((start_line, start_char), (end_line, end_char))) = range {
@@ -2175,6 +2197,12 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use super::Editor;
     use crate::model::buffer::Buffer;
     use crate::state::EditorState;
@@ -2196,8 +2224,12 @@ mod tests {
 
     #[test]
     fn test_inlay_hint_inserts_before_character() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         state.buffer = Buffer::from_str_test("ab");
 
         if !state.buffer.is_empty() {
@@ -2218,8 +2250,12 @@ mod tests {
 
     #[test]
     fn test_inlay_hint_at_eof_renders_after_last_char() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         state.buffer = Buffer::from_str_test("ab");
 
         if !state.buffer.is_empty() {
@@ -2240,8 +2276,12 @@ mod tests {
 
     #[test]
     fn test_inlay_hint_empty_buffer_is_ignored() {
-        let mut state =
-            EditorState::new(80, 24, crate::config::LARGE_FILE_THRESHOLD_BYTES as usize);
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
         state.buffer = Buffer::from_str_test("");
 
         let hints = vec![make_hint(0, 0, ": i32", Some(InlayHintKind::TYPE))];

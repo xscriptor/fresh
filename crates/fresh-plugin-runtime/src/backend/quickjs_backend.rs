@@ -5,8 +5,8 @@
 
 use anyhow::{anyhow, Result};
 use fresh_core::api::{
-    ActionPopupAction, ActionSpec, BufferInfo, EditorStateSnapshot, JsCallbackId, PluginCommand,
-    PluginResponse,
+    ActionSpec, BufferInfo, CompositeHunk, CreateCompositeBufferOptions, EditorStateSnapshot,
+    JsCallbackId, PluginCommand, PluginResponse,
 };
 use fresh_core::command::Command;
 use fresh_core::overlay::OverlayNamespace;
@@ -39,7 +39,7 @@ fn js_to_json(ctx: &rquickjs::Ctx<'_>, val: Value<'_>) -> serde_json::Value {
             .unwrap_or(serde_json::Value::Null),
         Type::Float => val
             .as_float()
-            .and_then(|f| serde_json::Number::from_f64(f))
+            .and_then(serde_json::Number::from_f64)
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         Type::String => val
@@ -245,6 +245,42 @@ fn should_panic_on_js_errors() -> bool {
     PANIC_ON_JS_ERRORS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// Global flag indicating a fatal JS error occurred that should terminate the plugin thread.
+/// This is used because panicking inside rquickjs callbacks (FFI boundary) gets caught by
+/// rquickjs's catch_unwind, so we need an alternative mechanism to signal errors.
+static FATAL_JS_ERROR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Storage for the fatal error message
+static FATAL_JS_ERROR_MSG: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Set a fatal JS error - call this instead of panicking inside FFI callbacks
+fn set_fatal_js_error(msg: String) {
+    if let Ok(mut guard) = FATAL_JS_ERROR_MSG.write() {
+        if guard.is_none() {
+            // Only store the first error
+            *guard = Some(msg);
+        }
+    }
+    FATAL_JS_ERROR.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Check if a fatal JS error has occurred
+pub fn has_fatal_js_error() -> bool {
+    FATAL_JS_ERROR.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Get and clear the fatal JS error message (returns None if no error)
+pub fn take_fatal_js_error() -> Option<String> {
+    if !FATAL_JS_ERROR.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    if let Ok(mut guard) = FATAL_JS_ERROR_MSG.write() {
+        guard.take()
+    } else {
+        Some("Fatal JS error (message unavailable)".to_string())
+    }
+}
+
 /// Run all pending jobs and check for unhandled exceptions
 /// If panic_on_js_errors is enabled, this will panic on unhandled exceptions
 fn run_pending_jobs_checked(ctx: &rquickjs::Ctx<'_>, context: &str) -> usize {
@@ -388,6 +424,7 @@ impl JsEditorApi {
     }
 
     /// List all open buffers - returns array of BufferInfo objects
+    #[plugin_api(ts_return = "BufferInfo[]")]
     pub fn list_buffers<'js>(&self, ctx: rquickjs::Ctx<'js>) -> rquickjs::Result<Value<'js>> {
         let buffers: Vec<BufferInfo> = if let Ok(s) = self.state_snapshot.read() {
             s.buffers.values().cloned().collect()
@@ -435,7 +472,7 @@ impl JsEditorApi {
     pub fn set_clipboard(&self, text: String) {
         let _ = self
             .command_sender
-            .send(PluginCommand::SetClipboard { text: text });
+            .send(PluginCommand::SetClipboard { text });
     }
 
     // === Command Registration ===
@@ -529,11 +566,9 @@ impl JsEditorApi {
         let args_map: HashMap<String, String> = if let Some(first_arg) = args.0.first() {
             if let Some(obj) = first_arg.as_object() {
                 let mut map = HashMap::new();
-                for key_result in obj.keys::<String>() {
-                    if let Ok(k) = key_result {
-                        if let Ok(v) = obj.get::<_, String>(&k) {
-                            map.insert(k, v);
-                        }
+                for k in obj.keys::<String>().flatten() {
+                    if let Ok(v) = obj.get::<_, String>(&k) {
+                        map.insert(k, v);
                     }
                 }
                 map
@@ -598,7 +633,19 @@ impl JsEditorApi {
         false
     }
 
+    /// Save a buffer to a specific file path
+    /// Used by :w filename to save unnamed buffers or save-as
+    pub fn save_buffer_to_path(&self, buffer_id: u32, path: String) -> bool {
+        self.command_sender
+            .send(PluginCommand::SaveBufferToPath {
+                buffer_id: BufferId(buffer_id as usize),
+                path: std::path::PathBuf::from(path),
+            })
+            .is_ok()
+    }
+
     /// Get buffer info by ID
+    #[plugin_api(ts_return = "BufferInfo | null")]
     pub fn get_buffer_info<'js>(
         &self,
         ctx: rquickjs::Ctx<'js>,
@@ -650,6 +697,7 @@ impl JsEditorApi {
     }
 
     /// Get viewport info for active buffer
+    #[plugin_api(ts_return = "ViewportInfo | null")]
     pub fn get_viewport<'js>(&self, ctx: rquickjs::Ctx<'js>) -> rquickjs::Result<Value<'js>> {
         let viewport = if let Ok(s) = self.state_snapshot.read() {
             s.viewport.clone()
@@ -666,6 +714,36 @@ impl JsEditorApi {
         // For now, return 0 - proper implementation needs buffer access
         // TODO: Add line number tracking to EditorStateSnapshot
         0
+    }
+
+    /// Get the byte offset of the start of a line (0-indexed line number)
+    /// Returns null if the line number is out of range
+    #[plugin_api(
+        async_promise,
+        js_name = "getLineStartPosition",
+        ts_return = "number | null"
+    )]
+    #[qjs(rename = "_getLineStartPositionStart")]
+    pub fn get_line_start_position_start(&self, _ctx: rquickjs::Ctx<'_>, line: u32) -> u64 {
+        let id = {
+            let mut id_ref = self.next_request_id.borrow_mut();
+            let id = *id_ref;
+            *id_ref += 1;
+            // Record context for this callback
+            self.callback_contexts
+                .borrow_mut()
+                .insert(id, self.plugin_name.clone());
+            id
+        };
+        // Use buffer_id 0 for active buffer
+        let _ = self
+            .command_sender
+            .send(PluginCommand::GetLineStartPosition {
+                buffer_id: BufferId(0),
+                line,
+                request_id: id,
+            });
+        id
     }
 
     /// Find buffer by file path, returns buffer ID or 0 if not found
@@ -908,17 +986,13 @@ impl JsEditorApi {
     }
 
     /// Read directory contents (returns array of {name, is_file, is_dir})
+    #[plugin_api(ts_return = "DirEntry[]")]
     pub fn read_dir<'js>(
         &self,
         ctx: rquickjs::Ctx<'js>,
         path: String,
     ) -> rquickjs::Result<Value<'js>> {
-        #[derive(serde::Serialize)]
-        struct DirEntry {
-            name: String,
-            is_file: bool,
-            is_dir: bool,
-        }
+        use fresh_core::api::DirEntry;
 
         let entries: Vec<DirEntry> = match std::fs::read_dir(&path) {
             Ok(entries) => entries
@@ -1082,10 +1156,8 @@ impl JsEditorApi {
             .0
             .map(|obj| {
                 let mut map = HashMap::new();
-                for result in obj.props::<String, String>() {
-                    if let Ok((k, v)) = result {
-                        map.insert(k, v);
-                    }
+                for (k, v) in obj.props::<String, String>().flatten() {
+                    map.insert(k, v);
                 }
                 map
             })
@@ -1097,17 +1169,12 @@ impl JsEditorApi {
     // === Composite Buffers ===
 
     /// Create a composite buffer (async)
+    ///
+    /// Uses typed CreateCompositeBufferOptions - serde validates field names at runtime
+    /// via `deny_unknown_fields` attribute
     #[plugin_api(async_promise, js_name = "createCompositeBuffer", ts_return = "number")]
     #[qjs(rename = "_createCompositeBufferStart")]
-    pub fn create_composite_buffer_start<'js>(
-        &self,
-        _ctx: rquickjs::Ctx<'js>,
-        opts: rquickjs::Object<'js>,
-    ) -> rquickjs::Result<u64> {
-        use fresh_core::api::{
-            CompositeHunk, CompositeLayoutConfig, CompositePaneStyle, CompositeSourceConfig,
-        };
-
+    pub fn create_composite_buffer_start(&self, opts: CreateCompositeBufferOptions) -> u64 {
         let id = {
             let mut id_ref = self.next_request_id.borrow_mut();
             let id = *id_ref;
@@ -1119,96 +1186,30 @@ impl JsEditorApi {
             id
         };
 
-        let name: String = opts.get("name").unwrap_or_default();
-        let mode: String = opts.get("mode").unwrap_or_default();
-
-        // Parse layout
-        let layout_obj: rquickjs::Object = opts.get("layout")?;
-        let layout = CompositeLayoutConfig {
-            layout_type: layout_obj
-                .get("type")
-                .unwrap_or_else(|_| "side-by-side".to_string()),
-            ratios: layout_obj.get("ratios").ok(),
-            show_separator: layout_obj.get("showSeparator").unwrap_or(true),
-            spacing: layout_obj.get("spacing").ok(),
-        };
-
-        // Parse sources
-        let sources_arr: Vec<rquickjs::Object> = opts.get("sources").unwrap_or_default();
-        let sources: Vec<CompositeSourceConfig> = sources_arr
-            .into_iter()
-            .map(|obj| {
-                let style_obj: Option<rquickjs::Object> = obj.get("style").ok();
-                let style = style_obj.map(|s| CompositePaneStyle {
-                    add_bg: None,
-                    remove_bg: None,
-                    modify_bg: None,
-                    gutter_style: s.get("gutterStyle").ok(),
-                });
-                CompositeSourceConfig {
-                    buffer_id: obj.get::<_, usize>("bufferId").unwrap_or(0),
-                    label: obj.get("label").unwrap_or_default(),
-                    editable: obj.get("editable").unwrap_or(false),
-                    style,
-                }
-            })
-            .collect();
-
-        // Parse hunks (optional)
-        let hunks: Option<Vec<CompositeHunk>> = opts
-            .get::<_, Vec<rquickjs::Object>>("hunks")
-            .ok()
-            .map(|arr| {
-                arr.into_iter()
-                    .map(|obj| CompositeHunk {
-                        old_start: obj.get("oldStart").unwrap_or(0),
-                        old_count: obj.get("oldCount").unwrap_or(0),
-                        new_start: obj.get("newStart").unwrap_or(0),
-                        new_count: obj.get("newCount").unwrap_or(0),
-                    })
-                    .collect()
-            });
-
         let _ = self
             .command_sender
             .send(PluginCommand::CreateCompositeBuffer {
-                name,
-                mode,
-                layout,
-                sources,
-                hunks,
+                name: opts.name,
+                mode: opts.mode,
+                layout: opts.layout,
+                sources: opts.sources,
+                hunks: opts.hunks,
                 request_id: Some(id),
             });
 
-        Ok(id)
+        id
     }
 
     /// Update alignment hunks for a composite buffer
-    pub fn update_composite_alignment<'js>(
-        &self,
-        _ctx: rquickjs::Ctx<'js>,
-        buffer_id: u32,
-        hunks: Vec<rquickjs::Object<'js>>,
-    ) -> rquickjs::Result<bool> {
-        use fresh_core::api::CompositeHunk;
-
-        let hunks: Vec<CompositeHunk> = hunks
-            .into_iter()
-            .map(|obj| CompositeHunk {
-                old_start: obj.get("oldStart").unwrap_or(0),
-                old_count: obj.get("oldCount").unwrap_or(0),
-                new_start: obj.get("newStart").unwrap_or(0),
-                new_count: obj.get("newCount").unwrap_or(0),
-            })
-            .collect();
-
-        Ok(self
-            .command_sender
+    ///
+    /// Uses typed Vec<CompositeHunk> - serde validates field names at runtime
+    pub fn update_composite_alignment(&self, buffer_id: u32, hunks: Vec<CompositeHunk>) -> bool {
+        self.command_sender
             .send(PluginCommand::UpdateCompositeAlignment {
                 buffer_id: BufferId(buffer_id as usize),
                 hunks,
             })
-            .is_ok())
+            .is_ok()
     }
 
     /// Close a composite buffer
@@ -1353,6 +1354,9 @@ impl JsEditorApi {
     // === View Transform ===
 
     /// Submit a view transform for a buffer/split
+    ///
+    /// Note: tokens should be ViewTokenWire[], layoutHints should be LayoutHints
+    /// These use manual parsing due to complex enum handling
     #[allow(clippy::too_many_arguments)]
     pub fn submit_view_transform<'js>(
         &self,
@@ -1454,21 +1458,30 @@ impl JsEditorApi {
         let decorations: Vec<FileExplorerDecoration> = decorations
             .into_iter()
             .map(|obj| {
-                let color: Vec<u8> = obj.get("color").unwrap_or_else(|_| vec![128, 128, 128]);
-                FileExplorerDecoration {
-                    path: std::path::PathBuf::from(
-                        obj.get::<_, String>("path").unwrap_or_default(),
-                    ),
-                    symbol: obj.get("symbol").unwrap_or_default(),
-                    color: if color.len() >= 3 {
-                        (color[0], color[1], color[2])
-                    } else {
-                        (128, 128, 128)
-                    },
-                    priority: obj.get("priority").unwrap_or(0),
+                let path: String = obj.get("path")?;
+                let symbol: String = obj.get("symbol")?;
+                let color: Vec<u8> = obj.get("color")?;
+                let priority: i32 = obj.get("priority").unwrap_or(0);
+
+                if color.len() < 3 {
+                    return Err(rquickjs::Error::FromJs {
+                        from: "array",
+                        to: "color",
+                        message: Some(format!(
+                            "color array must have at least 3 elements, got {}",
+                            color.len()
+                        )),
+                    });
                 }
+
+                Ok(FileExplorerDecoration {
+                    path: std::path::PathBuf::from(path),
+                    symbol,
+                    color: [color[0], color[1], color[2]],
+                    priority,
+                })
             })
-            .collect();
+            .collect::<rquickjs::Result<Vec<_>>>()?;
 
         Ok(self
             .command_sender
@@ -1587,6 +1600,36 @@ impl JsEditorApi {
 
     // === Prompts ===
 
+    /// Show a prompt and wait for user input (async)
+    /// Returns the user input or null if cancelled
+    #[plugin_api(async_promise, js_name = "prompt", ts_return = "string | null")]
+    #[qjs(rename = "_promptStart")]
+    pub fn prompt_start(
+        &self,
+        _ctx: rquickjs::Ctx<'_>,
+        label: String,
+        initial_value: String,
+    ) -> u64 {
+        let id = {
+            let mut id_ref = self.next_request_id.borrow_mut();
+            let id = *id_ref;
+            *id_ref += 1;
+            // Record context for this callback
+            self.callback_contexts
+                .borrow_mut()
+                .insert(id, self.plugin_name.clone());
+            id
+        };
+
+        let _ = self.command_sender.send(PluginCommand::StartPromptAsync {
+            label,
+            initial_value,
+            callback_id: JsCallbackId::new(id),
+        });
+
+        id
+    }
+
     /// Start an interactive prompt
     pub fn start_prompt(&self, label: String, prompt_type: String) -> bool {
         self.command_sender
@@ -1610,27 +1653,16 @@ impl JsEditorApi {
             .is_ok()
     }
 
-    /// Set suggestions for the current prompt (takes array of suggestion objects)
-    pub fn set_prompt_suggestions<'js>(
+    /// Set suggestions for the current prompt
+    ///
+    /// Uses typed Vec<Suggestion> - serde validates field names at runtime
+    pub fn set_prompt_suggestions(
         &self,
-        _ctx: rquickjs::Ctx<'js>,
-        suggestions_arr: Vec<rquickjs::Object<'js>>,
-    ) -> rquickjs::Result<bool> {
-        let suggestions: Vec<fresh_core::command::Suggestion> = suggestions_arr
-            .into_iter()
-            .map(|obj| fresh_core::command::Suggestion {
-                text: obj.get("text").unwrap_or_default(),
-                description: obj.get("description").ok(),
-                value: obj.get("value").ok(),
-                disabled: obj.get("disabled").unwrap_or(false),
-                keybinding: obj.get("keybinding").ok(),
-                source: None,
-            })
-            .collect();
-        Ok(self
-            .command_sender
+        suggestions: Vec<fresh_core::command::Suggestion>,
+    ) -> bool {
+        self.command_sender
             .send(PluginCommand::SetPromptSuggestions { suggestions })
-            .is_ok())
+            .is_ok()
     }
 
     // === Modes ===
@@ -1859,52 +1891,26 @@ impl JsEditorApi {
     // === Actions ===
 
     /// Execute multiple actions in sequence
-    pub fn execute_actions<'js>(
-        &self,
-        _ctx: rquickjs::Ctx<'js>,
-        actions: Vec<rquickjs::Object<'js>>,
-    ) -> rquickjs::Result<bool> {
-        let specs: Vec<ActionSpec> = actions
-            .into_iter()
-            .map(|obj| ActionSpec {
-                action: obj.get("action").unwrap_or_default(),
-                count: obj.get("count").unwrap_or(1),
-            })
-            .collect();
-        Ok(self
-            .command_sender
-            .send(PluginCommand::ExecuteActions { actions: specs })
-            .is_ok())
+    ///
+    /// Takes typed ActionSpec array - serde validates field names at runtime
+    pub fn execute_actions(&self, actions: Vec<ActionSpec>) -> bool {
+        self.command_sender
+            .send(PluginCommand::ExecuteActions { actions })
+            .is_ok()
     }
 
     /// Show an action popup
-    pub fn show_action_popup<'js>(
-        &self,
-        _ctx: rquickjs::Ctx<'js>,
-        opts: rquickjs::Object<'js>,
-    ) -> rquickjs::Result<bool> {
-        let popup_id: String = opts.get("popupId").unwrap_or_default();
-        let title: String = opts.get("title").unwrap_or_default();
-        let message: String = opts.get("message").unwrap_or_default();
-        let actions_arr: Vec<rquickjs::Object> = opts.get("actions").unwrap_or_default();
-
-        let actions: Vec<ActionPopupAction> = actions_arr
-            .into_iter()
-            .map(|obj| ActionPopupAction {
-                id: obj.get("id").unwrap_or_default(),
-                label: obj.get("label").unwrap_or_default(),
-            })
-            .collect();
-
-        Ok(self
-            .command_sender
+    ///
+    /// Takes a typed ActionPopupOptions struct - serde validates field names at runtime
+    pub fn show_action_popup(&self, opts: fresh_core::api::ActionPopupOptions) -> bool {
+        self.command_sender
             .send(PluginCommand::ShowActionPopup {
-                popup_id,
-                title,
-                message,
-                actions,
+                popup_id: opts.id,
+                title: opts.title,
+                message: opts.message,
+                actions: opts.actions,
             })
-            .is_ok())
+            .is_ok()
     }
 
     /// Disable LSP for a specific language
@@ -1914,31 +1920,49 @@ impl JsEditorApi {
             .is_ok()
     }
 
+    /// Set the workspace root URI for a specific language's LSP server
+    /// This allows plugins to specify project roots (e.g., directory containing .csproj)
+    pub fn set_lsp_root_uri(&self, language: String, uri: String) -> bool {
+        self.command_sender
+            .send(PluginCommand::SetLspRootUri { language, uri })
+            .is_ok()
+    }
+
     /// Get all diagnostics from LSP
+    #[plugin_api(ts_return = "JsDiagnostic[]")]
     pub fn get_all_diagnostics<'js>(
         &self,
         ctx: rquickjs::Ctx<'js>,
     ) -> rquickjs::Result<Value<'js>> {
+        use fresh_core::api::{JsDiagnostic, JsPosition, JsRange};
+
         let diagnostics = if let Ok(s) = self.state_snapshot.read() {
-            // Convert to a simpler format for JS
-            let mut result: Vec<serde_json::Value> = Vec::new();
+            // Convert to JsDiagnostic format for JS
+            let mut result: Vec<JsDiagnostic> = Vec::new();
             for (uri, diags) in &s.diagnostics {
                 for diag in diags {
-                    result.push(serde_json::json!({
-                        "uri": uri,
-                        "message": diag.message,
-                        "severity": diag.severity.map(|s| match s {
+                    result.push(JsDiagnostic {
+                        uri: uri.clone(),
+                        message: diag.message.clone(),
+                        severity: diag.severity.map(|s| match s {
                             lsp_types::DiagnosticSeverity::ERROR => 1,
                             lsp_types::DiagnosticSeverity::WARNING => 2,
                             lsp_types::DiagnosticSeverity::INFORMATION => 3,
                             lsp_types::DiagnosticSeverity::HINT => 4,
                             _ => 0,
                         }),
-                        "range": {
-                            "start": {"line": diag.range.start.line, "character": diag.range.start.character},
-                            "end": {"line": diag.range.end.line, "character": diag.range.end.character}
-                        }
-                    }));
+                        range: JsRange {
+                            start: JsPosition {
+                                line: diag.range.start.line,
+                                character: diag.range.start.character,
+                            },
+                            end: JsPosition {
+                                line: diag.range.end.line,
+                                character: diag.range.end.character,
+                            },
+                        },
+                        source: diag.source.clone(),
+                    });
                 }
             }
             result
@@ -1963,8 +1987,12 @@ impl JsEditorApi {
 
     // === Virtual Buffers ===
 
-    /// Create a virtual buffer in current split (async, returns buffer ID)
-    #[plugin_api(async_promise, js_name = "createVirtualBuffer", ts_return = "number")]
+    /// Create a virtual buffer in current split (async, returns buffer and split IDs)
+    #[plugin_api(
+        async_promise,
+        js_name = "createVirtualBuffer",
+        ts_return = "VirtualBufferResult"
+    )]
     #[qjs(rename = "_createVirtualBufferStart")]
     pub fn create_virtual_buffer_start(
         &self,
@@ -2013,11 +2041,11 @@ impl JsEditorApi {
         Ok(id)
     }
 
-    /// Create a virtual buffer in a new split (async, returns request_id)
+    /// Create a virtual buffer in a new split (async, returns buffer and split IDs)
     #[plugin_api(
         async_promise,
         js_name = "createVirtualBufferInSplit",
-        ts_return = "number"
+        ts_return = "VirtualBufferResult"
     )]
     #[qjs(rename = "_createVirtualBufferInSplitStart")]
     pub fn create_virtual_buffer_in_split_start(
@@ -2066,11 +2094,11 @@ impl JsEditorApi {
         Ok(id)
     }
 
-    /// Create a virtual buffer in an existing split (async, returns request_id)
+    /// Create a virtual buffer in an existing split (async, returns buffer and split IDs)
     #[plugin_api(
         async_promise,
         js_name = "createVirtualBufferInExistingSplit",
-        ts_return = "number"
+        ts_return = "VirtualBufferResult"
     )]
     #[qjs(rename = "_createVirtualBufferInExistingSplitStart")]
     pub fn create_virtual_buffer_in_existing_split_start(
@@ -2118,6 +2146,8 @@ impl JsEditorApi {
     }
 
     /// Set virtual buffer content (takes array of entry objects)
+    ///
+    /// Note: entries should be TextPropertyEntry[] - uses manual parsing for HashMap support
     pub fn set_virtual_buffer_content<'js>(
         &self,
         ctx: rquickjs::Ctx<'js>,
@@ -2432,7 +2462,10 @@ impl QuickJsBackend {
                     tracing::error!("Unhandled Promise rejection: {}", error_msg);
 
                     if should_panic_on_js_errors() {
-                        panic!("Unhandled Promise rejection: {}", error_msg);
+                        // Don't panic here - we're inside an FFI callback and rquickjs catches panics.
+                        // Instead, set a fatal error flag that the plugin thread loop will check.
+                        let full_msg = format!("Unhandled Promise rejection: {}", error_msg);
+                        set_fatal_js_error(full_msg);
                     }
                 }
             },

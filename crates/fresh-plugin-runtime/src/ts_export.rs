@@ -15,13 +15,16 @@ use oxc_span::SourceType;
 use ts_rs::TS;
 
 use fresh_core::api::{
-    ActionPopupAction, ActionSpec, BackgroundProcessResult, BufferInfo, BufferSavedDiff,
-    CompositeHunk, CompositeLayoutConfig, CompositePaneStyle, CompositeSourceConfig,
-    CreateVirtualBufferInExistingSplitOptions, CreateVirtualBufferInSplitOptions,
-    CreateVirtualBufferOptions, CursorInfo, JsTextPropertyEntry, LayoutHints, SpawnResult,
+    ActionPopupAction, ActionPopupOptions, ActionSpec, BackgroundProcessResult, BufferInfo,
+    BufferSavedDiff, CompositeHunk, CompositeLayoutConfig, CompositePaneStyle,
+    CompositeSourceConfig, CreateCompositeBufferOptions, CreateVirtualBufferInExistingSplitOptions,
+    CreateVirtualBufferInSplitOptions, CreateVirtualBufferOptions, CursorInfo, DirEntry,
+    JsDiagnostic, JsPosition, JsRange, JsTextPropertyEntry, LayoutHints, SpawnResult,
     TextPropertiesAtCursor, TsHighlightSpan, ViewTokenStyle, ViewTokenWire, ViewTokenWireKind,
-    ViewportInfo,
+    ViewportInfo, VirtualBufferResult,
 };
+use fresh_core::command::Suggestion;
+use fresh_core::file_explorer::FileExplorerDecoration;
 
 /// Get the TypeScript declaration for a type by name
 ///
@@ -48,6 +51,9 @@ fn get_type_decl(type_name: &str) -> Option<String> {
         "TsCompositeSourceConfig" | "CompositeSourceConfig" => Some(CompositeSourceConfig::decl()),
         "TsCompositePaneStyle" | "CompositePaneStyle" => Some(CompositePaneStyle::decl()),
         "TsCompositeHunk" | "CompositeHunk" => Some(CompositeHunk::decl()),
+        "TsCreateCompositeBufferOptions" | "CreateCompositeBufferOptions" => {
+            Some(CreateCompositeBufferOptions::decl())
+        }
 
         // View transform types
         "ViewTokenWireKind" => Some(ViewTokenWireKind::decl()),
@@ -56,7 +62,9 @@ fn get_type_decl(type_name: &str) -> Option<String> {
 
         // UI types (ts-rs renames these with Ts prefix)
         "TsActionPopupAction" | "ActionPopupAction" => Some(ActionPopupAction::decl()),
+        "ActionPopupOptions" => Some(ActionPopupOptions::decl()),
         "TsHighlightSpan" => Some(TsHighlightSpan::decl()),
+        "FileExplorerDecoration" => Some(FileExplorerDecoration::decl()),
 
         // Virtual buffer option types
         "TextPropertyEntry" | "JsTextPropertyEntry" => Some(JsTextPropertyEntry::decl()),
@@ -68,6 +76,16 @@ fn get_type_decl(type_name: &str) -> Option<String> {
 
         // Return types
         "TextPropertiesAtCursor" => Some(TextPropertiesAtCursor::decl()),
+        "VirtualBufferResult" => Some(VirtualBufferResult::decl()),
+
+        // Prompt and directory types
+        "PromptSuggestion" | "Suggestion" => Some(Suggestion::decl()),
+        "DirEntry" => Some(DirEntry::decl()),
+
+        // Diagnostic types
+        "JsDiagnostic" => Some(JsDiagnostic::decl()),
+        "JsRange" => Some(JsRange::decl()),
+        "JsPosition" => Some(JsPosition::decl()),
 
         _ => None,
     }
@@ -77,7 +95,27 @@ fn get_type_decl(type_name: &str) -> Option<String> {
 /// These are types referenced inside option structs or other complex types
 /// that aren't directly in method signatures.
 const DEPENDENCY_TYPES: &[&str] = &[
-    "TextPropertyEntry", // Used in CreateVirtualBuffer*Options.entries
+    "TextPropertyEntry",              // Used in CreateVirtualBuffer*Options.entries
+    "TsCompositeLayoutConfig",        // Used in createCompositeBuffer opts
+    "TsCompositeSourceConfig",        // Used in createCompositeBuffer opts.sources
+    "TsCompositePaneStyle",           // Used in TsCompositeSourceConfig.style
+    "TsCompositeHunk",                // Used in createCompositeBuffer opts.hunks
+    "TsCreateCompositeBufferOptions", // Options for createCompositeBuffer
+    "ViewportInfo",                   // Used by plugins for viewport queries
+    "LayoutHints",                    // Used by plugins for view transforms
+    "ViewTokenWire",                  // Used by plugins for view transforms
+    "ViewTokenWireKind",              // Used by ViewTokenWire
+    "ViewTokenStyle",                 // Used by ViewTokenWire
+    "PromptSuggestion",               // Used by plugins for prompt suggestions
+    "DirEntry",                       // Used by plugins for directory entries
+    "BufferInfo",                     // Used by listBuffers, getBufferInfo
+    "JsDiagnostic",                   // Used by getAllDiagnostics
+    "JsRange",                        // Used by JsDiagnostic
+    "JsPosition",                     // Used by JsRange
+    "ActionSpec",                     // Used by executeActions
+    "TsActionPopupAction",            // Used by ActionPopupOptions.actions
+    "ActionPopupOptions",             // Used by showActionPopup
+    "FileExplorerDecoration",         // Used by setFileExplorerDecorations
 ];
 
 /// Collect TypeScript type declarations based on referenced types from proc macro
@@ -178,12 +216,13 @@ pub fn write_fresh_dts() -> Result<(), String> {
     // Format the TypeScript
     let formatted = format_typescript(&content);
 
-    // Determine output path
+    // Determine output path - write to fresh-editor/plugins/lib/fresh.d.ts
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     let output_path = std::path::Path::new(&manifest_dir)
-        .join("plugins")
-        .join("lib")
-        .join("fresh.d.ts");
+        .parent() // crates/
+        .and_then(|p| p.parent()) // workspace root
+        .map(|p| p.join("crates/fresh-editor/plugins/lib/fresh.d.ts"))
+        .unwrap_or_else(|| std::path::PathBuf::from("plugins/lib/fresh.d.ts"));
 
     // Only write if content changed
     let should_write = match std::fs::read_to_string(&output_path) {
@@ -206,12 +245,68 @@ mod tests {
     use super::*;
 
     /// Generate, validate, format, and write fresh.d.ts
-    /// Run with: cargo test --features plugins write_fresh_dts_file -- --ignored --nocapture
+    /// Run with: cargo test -p fresh-plugin-runtime write_fresh_dts_file -- --ignored --nocapture
     #[test]
     #[ignore]
     fn write_fresh_dts_file() {
         // write_fresh_dts validates syntax and formats before writing
         write_fresh_dts().expect("Failed to write fresh.d.ts");
         println!("Successfully generated, validated, and formatted fresh.d.ts");
+    }
+
+    /// Type check all plugins using TypeScript compiler
+    /// Skips if tsc is not available in PATH
+    /// Run with: cargo test -p fresh-plugin-runtime type_check_plugins -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn type_check_plugins() {
+        // Check if tsc is available
+        let tsc_check = std::process::Command::new("tsc").arg("--version").output();
+
+        match tsc_check {
+            Ok(output) if output.status.success() => {
+                println!(
+                    "Found tsc: {}",
+                    String::from_utf8_lossy(&output.stdout).trim()
+                );
+            }
+            _ => {
+                println!("tsc not found in PATH, skipping type check test");
+                return;
+            }
+        }
+
+        // Find the check-types.sh script
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let script_path = std::path::Path::new(&manifest_dir)
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("crates/fresh-editor/plugins/check-types.sh"))
+            .expect("Failed to find check-types.sh");
+
+        println!("Running type check script: {}", script_path.display());
+
+        // Run the check-types.sh script
+        let output = std::process::Command::new("bash")
+            .arg(&script_path)
+            .output()
+            .expect("Failed to run check-types.sh");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        println!("stdout:\n{}", stdout);
+        if !stderr.is_empty() {
+            println!("stderr:\n{}", stderr);
+        }
+
+        // The script outputs "X file(s) had type errors" if there are errors
+        if stdout.contains("had type errors") || !output.status.success() {
+            panic!(
+                "TypeScript type check failed. Run 'crates/fresh-editor/plugins/check-types.sh' to see details."
+            );
+        }
+
+        println!("All plugins type check successfully!");
     }
 }

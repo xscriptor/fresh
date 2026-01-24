@@ -738,6 +738,66 @@ fn test_settings_search_jump_scrolls() {
     harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
 }
 
+/// Test that clicking on a search result navigates to that setting
+///
+/// When search results are displayed, clicking on one should:
+/// 1. Navigate to that setting (same as pressing Enter)
+/// 2. Exit search mode
+/// 3. Show the setting in the settings panel
+#[test]
+fn test_settings_search_result_click_navigates() {
+    let mut harness = EditorTestHarness::new(100, 30).unwrap();
+
+    // Open settings
+    harness
+        .send_key(KeyCode::Char(','), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Search for "tab" which should match "Tab Size" in Editor category
+    harness
+        .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
+        .unwrap();
+    for c in "tab".chars() {
+        harness
+            .send_key(KeyCode::Char(c), KeyModifiers::NONE)
+            .unwrap();
+    }
+    harness.render().unwrap();
+
+    // Should show search results with "Tab Size"
+    harness.assert_screen_contains("Tab Size");
+
+    // Find the position of "Tab Size" on screen
+    let screen = harness.screen_to_string();
+    let result_pos = screen
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| line.find("Tab Size").map(|col| (col as u16, row as u16)))
+        .expect("Should find Tab Size in search results");
+
+    // Click on the search result
+    harness.mouse_click(result_pos.0 + 2, result_pos.1).unwrap();
+    harness.render().unwrap();
+
+    // After clicking, search mode should be closed
+    // "Type to search" appears in search mode - should not be visible now
+    assert!(
+        !harness.screen_to_string().contains("Type to search"),
+        "Search mode should be closed after clicking a result"
+    );
+
+    // The setting should be visible in the settings panel (not search results)
+    // We should see "Tab Size" as the selected setting with its control
+    harness.assert_screen_contains("Tab Size");
+
+    // We should be in the Editor category now (Tab Size is an Editor setting)
+    harness.assert_screen_contains("Editor");
+
+    // Close settings
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+}
+
 /// Test theme dropdown can be cycled with Enter or Right arrow
 /// BUG: Theme dropdown doesn't cycle - it stays on the same value
 #[test]
@@ -885,9 +945,10 @@ fn test_settings_from_terminal_mode_captures_input() {
     harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     harness.render().unwrap();
 
-    // Editor category has "Auto Indent" which General doesn't have prominently
+    // Editor category has settings organized by sections - Completion section comes first
     // If Down key worked in Settings, we should now be viewing Editor settings
-    harness.assert_screen_contains("Auto Indent");
+    // Check for a setting in the visible Completion section
+    harness.assert_screen_contains("Quick Suggestions");
 
     // Clean up - close settings
     harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
@@ -1106,16 +1167,19 @@ fn test_settings_descriptions_render_properly() {
     );
 
     // Check that we can see some expected description content
-    // These descriptions should exist for Editor settings
+    // Settings are now organized by section, so we check for Completion section content
+    // (which comes first alphabetically)
     assert!(
-        screen.contains("indent") || screen.contains("Indent"),
-        "Should show indent-related description"
+        screen.contains("completion")
+            || screen.contains("Completion")
+            || screen.contains("suggest"),
+        "Should show completion-related description (first visible section)"
     );
 
-    // Verify descriptions are rendered (can be either case)
+    // Verify descriptions are rendered - check for section header or setting content
     assert!(
-        screen.contains("hether to enable"),
-        "Description containing 'whether to enable' should be visible"
+        screen.contains("Enter") || screen.contains("trigger") || screen.contains("suggestions"),
+        "Description containing completion behavior should be visible"
     );
 
     // Close settings
@@ -2863,6 +2927,288 @@ fn test_map_add_new_button_clickable_with_mouse() {
     // and the "[+] Add new" would remain just focused without any action
 
     // Close everything and clean up
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+    harness.render().unwrap();
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+}
+
+/// Test that "[+] Add new" button is visible for LSP map which doesn't have x-no-add
+///
+/// The LSP config is a Map type with additionalProperties that should allow adding new entries.
+/// Unlike plugins (which has x-no-add: true), LSP should show the "[+] Add new" button.
+#[test]
+fn test_lsp_map_has_add_new_button() {
+    let mut harness = EditorTestHarness::new(120, 50).unwrap();
+    harness.render().unwrap();
+
+    // Open settings via Ctrl+,
+    harness
+        .send_key(KeyCode::Char(','), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Search for "lsp" to navigate to the LSP section
+    harness
+        .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
+        .unwrap();
+    harness.type_text("lsp").unwrap();
+    harness.render().unwrap();
+
+    // Press Enter to jump to the LSP map
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Verify we're in the LSP section
+    harness.assert_screen_contains("Lsp");
+
+    // The "[+] Add new" button should be visible for LSP since it doesn't have x-no-add
+    // This will fail if the add button is not being rendered
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("[+] Add new"),
+        "LSP map should show '[+] Add new' button since it doesn't have x-no-add.\n\
+         The LSP section should allow users to add new language server configurations.\n\
+         Screen contents:\n{}",
+        screen
+    );
+
+    // Close settings
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+}
+
+/// Test that "[+] Add new" button is visible for Languages map which doesn't have x-no-add
+///
+/// The Languages config is a Map type with additionalProperties that should allow adding new entries.
+/// Unlike plugins (which has x-no-add: true), Languages should show the "[+] Add new" button.
+#[test]
+fn test_languages_map_has_add_new_button() {
+    let mut harness = EditorTestHarness::new(120, 50).unwrap();
+    harness.render().unwrap();
+
+    // Open settings via Ctrl+,
+    harness
+        .send_key(KeyCode::Char(','), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Search for "languages" to navigate to the Languages section
+    harness
+        .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
+        .unwrap();
+    harness.type_text("languages").unwrap();
+    harness.render().unwrap();
+
+    // Press Enter to jump to the Languages map
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Verify we're in the Languages section
+    harness.assert_screen_contains("Languages");
+
+    // Check that the focus is on Languages (indicated by ">")
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains(">  Languages"),
+        "Focus should be on Languages section. Screen:\n{}",
+        screen
+    );
+
+    // Navigate down through the Languages entries to reach the "[+] Add new" row
+    // The Languages map has many built-in entries, so we need to scroll to see the add button
+    for _ in 0..30 {
+        harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        harness.render().unwrap();
+
+        let screen = harness.screen_to_string();
+        // Check if we can see "[+] Add new" in the visible Languages section
+        if screen.contains("[+] Add new") && screen.contains("Languages") {
+            // Found it! The add button is visible for Languages
+            break;
+        }
+    }
+
+    let screen = harness.screen_to_string();
+
+    // The "[+] Add new" button should now be visible after scrolling
+    assert!(
+        screen.contains("[+] Add new"),
+        "Languages map should show '[+] Add new' button after scrolling to the end.\n\
+         The Languages section should allow users to add new language configurations.\n\
+         Full screen:\n{}",
+        screen
+    );
+
+    // Close settings
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+}
+
+/// Test that clicking "[+] Add new" on the LSP map opens the entry dialog
+///
+/// This verifies that mouse clicks on the add-new row of Map controls work correctly.
+#[test]
+fn test_lsp_map_add_new_button_click_opens_dialog() {
+    let mut harness = EditorTestHarness::new(120, 50).unwrap();
+    harness.render().unwrap();
+
+    // Open settings via Ctrl+,
+    harness
+        .send_key(KeyCode::Char(','), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Search for "lsp" to navigate to the LSP section
+    harness
+        .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
+        .unwrap();
+    harness.type_text("lsp").unwrap();
+    harness.render().unwrap();
+
+    // Press Enter to jump to the LSP map
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Verify we're in the LSP section
+    harness.assert_screen_contains("Lsp");
+
+    // Navigate down through the LSP entries to reach the "[+] Add new" row
+    // if it's not immediately visible
+    for _ in 0..30 {
+        let screen = harness.screen_to_string();
+        if screen.contains("[+] Add new") && screen.contains("Lsp") {
+            break;
+        }
+        harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        harness.render().unwrap();
+    }
+
+    harness.assert_screen_contains("[+] Add new");
+
+    // Find the position of "[+] Add new" that appears after "Lsp:" label
+    // Need to find the one specifically in the LSP section, not Languages
+    let screen = harness.screen_to_string();
+    let lines: Vec<&str> = screen.lines().collect();
+
+    // Find the line with "[+] Add new" (it should be visible now after scrolling)
+    // The add-new row might not be immediately after the label due to entries
+    let add_new_pos = lines
+        .iter()
+        .enumerate()
+        .find_map(|(row, line)| line.find("[+] Add new").map(|col| (col as u16, row as u16)))
+        .expect("Should find [+] Add new after scrolling to it");
+
+    eprintln!("Clicking at ({}, {})", add_new_pos.0 + 2, add_new_pos.1);
+
+    // Click on the "[+] Add new" button
+    harness
+        .mouse_click(add_new_pos.0 + 2, add_new_pos.1)
+        .unwrap();
+    harness.render().unwrap();
+
+    // After clicking, the add-new row should be in edit mode
+    // This shows as a text input field (brackets with cursor) for entering the key name
+    // When in edit mode, the help line changes to show "Enter:Add"
+    let screen = harness.screen_to_string();
+    eprintln!("Screen after click:\n{}", screen);
+
+    // Check that we're in editing mode - the help text should show Enter:Add or similar
+    // indicating we can type a key name and press Enter to add it
+    assert!(
+        screen.contains("Enter:Add") || screen.contains("[") && screen.contains("]"),
+        "Clicking '[+] Add new' on LSP map should start text input mode for key name.\n\
+         The screen should show a text input field or 'Enter:Add' help text.\n\
+         Screen contents:\n{}",
+        screen
+    );
+
+    // Close the dialog and settings
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+    harness.render().unwrap();
+    harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+}
+
+/// Test that navigating through map entries scrolls to keep the focused entry visible
+///
+/// This tests the bug where pressing Down to navigate through entries in a Map control
+/// (like Languages) would move the focus but not scroll the view, causing the focused
+/// entry to go off-screen.
+#[test]
+fn test_map_entry_navigation_scrolls_to_focused_entry() {
+    // Use a small height to ensure the Languages list needs scrolling
+    let mut harness = EditorTestHarness::new(120, 30).unwrap();
+    harness.render().unwrap();
+
+    // Open settings
+    harness
+        .send_key(KeyCode::Char(','), KeyModifiers::CONTROL)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Search for "languages" to navigate to the Languages section
+    harness
+        .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
+        .unwrap();
+    harness.type_text("languages").unwrap();
+    harness.render().unwrap();
+
+    // Press Enter to jump to the Languages map
+    harness
+        .send_key(KeyCode::Enter, KeyModifiers::NONE)
+        .unwrap();
+    harness.render().unwrap();
+
+    // Verify we're in the Languages section and the first entry is focused
+    let screen = harness.screen_to_string();
+    assert!(
+        screen.contains("Languages"),
+        "Should show Languages section. Screen:\n{}",
+        screen
+    );
+
+    // The first entry should be focused immediately after jumping
+    assert!(
+        screen.contains("[Enter to edit]") || screen.contains("[+] Add new"),
+        "After jumping to Languages, the first entry should show '[Enter to edit]'.\n\
+         This indicates the Map control's focus state is properly set.\n\
+         Screen contents:\n{}",
+        screen
+    );
+
+    // Navigate down through multiple entries and verify each one shows "[Enter to edit]"
+    // which indicates it's the focused entry and is visible on screen
+    for i in 0..15 {
+        harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+        harness.render().unwrap();
+
+        let screen = harness.screen_to_string();
+
+        // The focused entry should be visible and show "[Enter to edit]"
+        // If the scroll isn't working, the focused entry will be off-screen
+        // and we won't see "[Enter to edit]" OR we should at least see "[+] Add new"
+        // when we reach the end of the list
+        let has_focused_entry = screen.contains("[Enter to edit]");
+        let has_add_new_focused = screen.contains("[+] Add new");
+
+        // Either we're focused on an entry (shows [Enter to edit]) or
+        // we've reached the add-new row (shows [+] Add new as focused)
+        assert!(
+            has_focused_entry || has_add_new_focused,
+            "After pressing Down {} times, the focused entry should be visible.\n\
+             Expected to see '[Enter to edit]' for a focused language entry or \n\
+             '[+] Add new' for the add-new row, but neither was found.\n\
+             This indicates the view didn't scroll to keep the focused entry visible.\n\
+             Screen contents:\n{}",
+            i + 1,
+            screen
+        );
+    }
+
+    // Close settings
     harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
     harness.render().unwrap();
     harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();

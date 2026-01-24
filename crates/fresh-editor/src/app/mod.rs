@@ -85,8 +85,9 @@ use crate::input::commands::Suggestion;
 use crate::input::keybindings::{Action, KeyContext, KeybindingResolver};
 use crate::input::position_history::PositionHistory;
 use crate::model::event::{Event, EventLog, SplitDirection, SplitId};
+use crate::model::filesystem::FileSystem;
 use crate::services::async_bridge::{AsyncBridge, AsyncMessage};
-use crate::services::fs::{FsBackend, FsManager, LocalFsBackend};
+use crate::services::fs::FsManager;
 use crate::services::lsp::manager::{detect_language, LspManager};
 use crate::services::plugins::PluginManager;
 use crate::services::recovery::{RecoveryConfig, RecoveryService};
@@ -176,7 +177,7 @@ pub struct Editor {
     dir_context: DirectoryContext,
 
     /// Grammar registry for TextMate syntax highlighting
-    grammar_registry: std::sync::Arc<crate::primitives::grammar_registry::GrammarRegistry>,
+    grammar_registry: std::sync::Arc<crate::primitives::grammar::GrammarRegistry>,
 
     /// Active theme
     theme: crate::view::theme::Theme,
@@ -258,6 +259,9 @@ pub struct Editor {
     /// Filesystem manager for file explorer
     fs_manager: Arc<FsManager>,
 
+    /// Filesystem implementation for IO operations
+    filesystem: Arc<dyn FileSystem + Send + Sync>,
+
     /// Whether file explorer is visible
     file_explorer_visible: bool,
 
@@ -329,6 +333,10 @@ pub struct Editor {
     /// Original LSP completion items (for type-to-filter)
     /// Stored when completion popup is shown, used for re-filtering as user types
     completion_items: Option<Vec<lsp_types::CompletionItem>>,
+
+    /// Scheduled completion trigger time (for debounced quick suggestions)
+    /// When Some, completion will be triggered when this instant is reached
+    scheduled_completion_trigger: Option<Instant>,
 
     /// Pending LSP go-to-definition request ID (if any)
     pending_goto_definition_request: Option<u64>,
@@ -432,6 +440,11 @@ pub struct Editor {
     /// Prompt histories keyed by prompt type name (e.g., "search", "replace", "goto_line", "plugin:custom_name")
     /// This provides a generic history system that works for all prompt types including plugin prompts.
     prompt_histories: HashMap<String, crate::input::input_history::InputHistory>,
+
+    /// Pending async prompt callback ID (for editor.prompt() API)
+    /// When the prompt is confirmed, the callback is resolved with the input text.
+    /// When cancelled, the callback is resolved with null.
+    pending_async_prompt_callback: Option<fresh_core::api::JsCallbackId>,
 
     /// LSP progress tracking (token -> progress info)
     lsp_progress: std::collections::HashMap<String, LspProgressInfo>,
@@ -646,6 +659,7 @@ impl Editor {
         height: u16,
         dir_context: DirectoryContext,
         color_capability: crate::view::color_support::ColorCapability,
+        filesystem: Arc<dyn FileSystem + Send + Sync>,
     ) -> AnyhowResult<Self> {
         Self::with_working_dir(
             config,
@@ -655,11 +669,13 @@ impl Editor {
             dir_context,
             true,
             color_capability,
+            filesystem,
         )
     }
 
     /// Create a new editor with an explicit working directory
     /// This is useful for testing with isolated temporary directories
+    #[allow(clippy::too_many_arguments)]
     pub fn with_working_dir(
         config: Config,
         width: u16,
@@ -668,22 +684,23 @@ impl Editor {
         dir_context: DirectoryContext,
         plugins_enabled: bool,
         color_capability: crate::view::color_support::ColorCapability,
+        filesystem: Arc<dyn FileSystem + Send + Sync>,
     ) -> AnyhowResult<Self> {
         Self::with_options(
             config,
             width,
             height,
             working_dir,
-            None,
+            filesystem,
             plugins_enabled,
             dir_context,
             None,
             color_capability,
-            crate::primitives::grammar_registry::GrammarRegistry::for_editor(),
+            crate::primitives::grammar::GrammarRegistry::for_editor(),
         )
     }
 
-    /// Create a new editor for testing with optional custom backends
+    /// Create a new editor for testing with custom backends
     /// Uses empty grammar registry for fast initialization
     #[allow(clippy::too_many_arguments)]
     pub fn for_test(
@@ -693,7 +710,7 @@ impl Editor {
         working_dir: Option<PathBuf>,
         dir_context: DirectoryContext,
         color_capability: crate::view::color_support::ColorCapability,
-        fs_backend: Option<Arc<dyn FsBackend>>,
+        filesystem: Arc<dyn FileSystem + Send + Sync>,
         time_source: Option<SharedTimeSource>,
     ) -> AnyhowResult<Self> {
         Self::with_options(
@@ -701,12 +718,12 @@ impl Editor {
             width,
             height,
             working_dir,
-            fs_backend,
+            filesystem,
             true,
             dir_context,
             time_source,
             color_capability,
-            crate::primitives::grammar_registry::GrammarRegistry::empty(),
+            crate::primitives::grammar::GrammarRegistry::empty(),
         )
     }
 
@@ -719,12 +736,12 @@ impl Editor {
         width: u16,
         height: u16,
         working_dir: Option<PathBuf>,
-        fs_backend: Option<Arc<dyn FsBackend>>,
+        filesystem: Arc<dyn FileSystem + Send + Sync>,
         enable_plugins: bool,
         dir_context: DirectoryContext,
         time_source: Option<SharedTimeSource>,
         color_capability: crate::view::color_support::ColorCapability,
-        grammar_registry: Arc<crate::primitives::grammar_registry::GrammarRegistry>,
+        grammar_registry: Arc<crate::primitives::grammar::GrammarRegistry>,
     ) -> AnyhowResult<Self> {
         // Use provided time_source or default to RealTimeSource
         let time_source = time_source.unwrap_or_else(RealTimeSource::shared);
@@ -739,7 +756,8 @@ impl Editor {
         let working_dir = working_dir.canonicalize().unwrap_or(working_dir);
 
         // Load theme from config
-        let theme = crate::view::theme::Theme::from_name(&config.theme)
+        let theme_loader = crate::view::theme::LocalThemeLoader::new();
+        let theme = crate::view::theme::Theme::load(&config.theme, &theme_loader)
             .ok_or_else(|| anyhow::anyhow!("Theme '{:?}' not found", config.theme))?;
 
         // Set terminal cursor color to match theme
@@ -761,6 +779,7 @@ impl Editor {
             width,
             height,
             config.editor.large_file_threshold_bytes as usize,
+            Arc::clone(&filesystem),
         );
         // Apply line_numbers default from config (fixes #539)
         state.margins.set_line_numbers(config.editor.line_numbers);
@@ -817,9 +836,7 @@ impl Editor {
         split_view_states.insert(initial_split_id, initial_view_state);
 
         // Initialize filesystem manager for file explorer
-        // Use provided backend or create default LocalFsBackend
-        let fs_backend = fs_backend.unwrap_or_else(|| Arc::new(LocalFsBackend::new()));
-        let fs_manager = Arc::new(FsManager::new(fs_backend));
+        let fs_manager = Arc::new(FsManager::new(Arc::clone(&filesystem)));
 
         // Initialize command registry (always available, used by both plugins and core)
         let command_registry = Arc::new(RwLock::new(CommandRegistry::new()));
@@ -962,6 +979,7 @@ impl Editor {
             scroll_sync_manager: ScrollSyncManager::new(),
             file_explorer: None,
             fs_manager,
+            filesystem,
             file_explorer_visible: false,
             file_explorer_sync_in_progress: false,
             file_explorer_width_percent: file_explorer_width,
@@ -985,6 +1003,7 @@ impl Editor {
             next_lsp_request_id: 0,
             pending_completion_request: None,
             completion_items: None,
+            scheduled_completion_trigger: None,
             pending_goto_definition_request: None,
             pending_hover_request: None,
             pending_references_request: None,
@@ -1034,6 +1053,7 @@ impl Editor {
                 }
                 histories
             },
+            pending_async_prompt_callback: None,
             lsp_progress: std::collections::HashMap::new(),
             lsp_server_statuses: std::collections::HashMap::new(),
             lsp_window_messages: Vec::new(),
@@ -1530,6 +1550,39 @@ impl Editor {
             }
         }
         false
+    }
+
+    /// Check if completion trigger timer has expired and trigger completion if so
+    ///
+    /// This implements debounced completion - we wait for quick_suggestions_delay_ms
+    /// before sending the completion request to avoid spamming the LSP server.
+    /// Returns true if a completion request was triggered.
+    pub fn check_completion_trigger_timer(&mut self) -> bool {
+        // Check if we have a scheduled completion trigger
+        let Some(trigger_time) = self.scheduled_completion_trigger else {
+            return false;
+        };
+
+        // Check if the timer has expired
+        if Instant::now() < trigger_time {
+            return false;
+        }
+
+        // Clear the scheduled trigger
+        self.scheduled_completion_trigger = None;
+
+        // Don't trigger if a popup is already visible
+        if self.active_state().popups.is_visible() {
+            return false;
+        }
+
+        // Trigger the completion request
+        if let Err(e) = self.request_completion() {
+            tracing::debug!("Failed to trigger debounced completion: {}", e);
+            return false;
+        }
+
+        true
     }
 
     /// Load an ANSI background image from a user-provided path
@@ -2790,7 +2843,7 @@ impl Editor {
     /// Handle file open directory load result
     pub(super) fn handle_file_open_directory_loaded(
         &mut self,
-        result: std::io::Result<Vec<crate::services::fs::FsEntry>>,
+        result: std::io::Result<Vec<crate::services::fs::DirEntry>>,
     ) {
         match result {
             Ok(entries) => {
@@ -2865,6 +2918,13 @@ impl Editor {
                     self.file_open_state = None;
                     self.file_browser_layout = None;
                 }
+                PromptType::AsyncPrompt => {
+                    // Resolve the pending async prompt callback with null (cancelled)
+                    if let Some(callback_id) = self.pending_async_prompt_callback.take() {
+                        self.plugin_manager
+                            .resolve_callback(callback_id, "null".to_string());
+                    }
+                }
                 _ => {}
             }
         }
@@ -2877,6 +2937,42 @@ impl Editor {
         if let Some(original_theme) = theme_to_restore {
             self.preview_theme(&original_theme);
         }
+    }
+
+    /// Handle mouse wheel scroll in prompt with suggestions.
+    /// Returns true if scroll was handled, false if no prompt is active or has no suggestions.
+    pub fn handle_prompt_scroll(&mut self, delta: i32) -> bool {
+        if let Some(ref mut prompt) = self.prompt {
+            if prompt.suggestions.is_empty() {
+                return false;
+            }
+
+            let current = prompt.selected_suggestion.unwrap_or(0);
+            let len = prompt.suggestions.len();
+
+            // Calculate new position based on scroll direction
+            // delta < 0 = scroll up, delta > 0 = scroll down
+            let new_selected = if delta < 0 {
+                // Scroll up - move selection up (decrease index)
+                current.saturating_sub((-delta) as usize)
+            } else {
+                // Scroll down - move selection down (increase index)
+                (current + delta as usize).min(len.saturating_sub(1))
+            };
+
+            prompt.selected_suggestion = Some(new_selected);
+
+            // Update input to match selected suggestion for non-plugin prompts
+            if !matches!(prompt.prompt_type, PromptType::Plugin { .. }) {
+                if let Some(suggestion) = prompt.suggestions.get(new_selected) {
+                    prompt.input = suggestion.get_value().to_string();
+                    prompt.cursor_pos = prompt.input.len();
+                }
+            }
+
+            return true;
+        }
+        false
     }
 
     /// Get the confirmed input and prompt type, consuming the prompt
@@ -2897,6 +2993,7 @@ impl Editor {
                     | PromptType::SelectTheme { .. }
                     | PromptType::SelectLocale
                     | PromptType::SwitchToTab
+                    | PromptType::SetLanguage
                     | PromptType::Plugin { .. }
             ) {
                 // Use the selected suggestion if any
@@ -3009,6 +3106,11 @@ impl Editor {
     /// Get access to the plugin manager
     pub fn plugin_manager(&self) -> &PluginManager {
         &self.plugin_manager
+    }
+
+    /// Get mutable access to the plugin manager
+    pub fn plugin_manager_mut(&mut self) -> &mut PluginManager {
+        &mut self.plugin_manager
     }
 
     /// Check if file explorer has focus
@@ -3141,7 +3243,8 @@ impl Editor {
             }
             PromptType::SwitchToTab
             | PromptType::SelectTheme { .. }
-            | PromptType::StopLspServer => {
+            | PromptType::StopLspServer
+            | PromptType::SetLanguage => {
                 if let Some(prompt) = &mut self.prompt {
                     prompt.filter_suggestions(false);
                 }
@@ -3164,6 +3267,10 @@ impl Editor {
     /// - File system changes (future)
     /// - Git status updates
     pub fn process_async_messages(&mut self) -> bool {
+        // Check plugin thread health - will panic if thread died due to error
+        // This ensures plugin errors surface quickly instead of causing silent hangs
+        self.plugin_manager.check_thread_health();
+
         let Some(bridge) = &self.async_bridge else {
             return false;
         };
@@ -3517,7 +3624,7 @@ impl Editor {
                             self.terminal_backing_files.get(&terminal_id).cloned()
                         {
                             if let Ok(mut file) =
-                                std::fs::OpenOptions::new().append(true).open(&backing_path)
+                                self.filesystem.open_file_for_append(&backing_path)
                             {
                                 use std::io::Write;
                                 let _ = file.write_all(exit_msg.as_bytes());
@@ -4049,6 +4156,13 @@ impl Editor {
             } => {
                 self.handle_start_prompt_with_initial(label, prompt_type, initial_value);
             }
+            PluginCommand::StartPromptAsync {
+                label,
+                initial_value,
+                callback_id,
+            } => {
+                self.handle_start_prompt_async(label, initial_value, callback_id);
+            }
             PluginCommand::SetPromptSuggestions { suggestions } => {
                 self.handle_set_prompt_suggestions(suggestions);
             }
@@ -4410,11 +4524,14 @@ impl Editor {
                                 req_id,
                                 buffer_id
                             );
-                            // createVirtualBuffer returns just the buffer ID (number), not an object
-                            let result = buffer_id.0.to_string();
+                            // createVirtualBuffer returns VirtualBufferResult: { bufferId, splitId }
+                            let result = fresh_core::api::VirtualBufferResult {
+                                buffer_id: buffer_id.0 as u64,
+                                split_id: None,
+                            };
                             self.plugin_manager.resolve_callback(
                                 fresh_core::api::JsCallbackId::from(req_id),
-                                result,
+                                serde_json::to_string(&result).unwrap_or_default(),
                             );
                             tracing::info!("CreateVirtualBufferWithContent: resolve_callback sent for request_id={}", req_id);
                         }
@@ -4467,13 +4584,13 @@ impl Editor {
 
                             // Send response with existing buffer ID and split ID via callback resolution
                             if let Some(req_id) = request_id {
-                                let result = serde_json::json!({
-                                    "bufferId": existing_buffer_id.0,
-                                    "splitId": splits.first().map(|s| s.0)
-                                });
+                                let result = fresh_core::api::VirtualBufferResult {
+                                    buffer_id: existing_buffer_id.0 as u64,
+                                    split_id: splits.first().map(|s| s.0 as u64),
+                                };
                                 self.plugin_manager.resolve_callback(
                                     fresh_core::api::JsCallbackId::from(req_id),
-                                    result.to_string(),
+                                    serde_json::to_string(&result).unwrap_or_default(),
                                 );
                             }
                             return Ok(());
@@ -4567,15 +4684,16 @@ impl Editor {
                     };
 
                 // Send response with buffer ID and split ID via callback resolution
+                // NOTE: Using VirtualBufferResult type for type-safe JSON serialization
                 if let Some(req_id) = request_id {
                     tracing::trace!("CreateVirtualBufferInSplit: resolving callback for request_id={}, buffer_id={:?}, split_id={:?}", req_id, buffer_id, created_split_id);
-                    let result = serde_json::json!({
-                        "bufferId": buffer_id.0,
-                        "splitId": created_split_id.map(|s| s.0)
-                    });
+                    let result = fresh_core::api::VirtualBufferResult {
+                        buffer_id: buffer_id.0 as u64,
+                        split_id: created_split_id.map(|s| s.0 as u64),
+                    };
                     self.plugin_manager.resolve_callback(
                         fresh_core::api::JsCallbackId::from(req_id),
-                        result.to_string(),
+                        serde_json::to_string(&result).unwrap_or_default(),
                     );
                 }
             }
@@ -4661,12 +4779,15 @@ impl Editor {
                     );
                 }
 
-                // Send response with buffer ID via callback resolution
+                // Send response with buffer ID and split ID via callback resolution
                 if let Some(req_id) = request_id {
-                    // Return just the buffer ID as a number (consistent with TypeScript definition)
+                    let result = fresh_core::api::VirtualBufferResult {
+                        buffer_id: buffer_id.0 as u64,
+                        split_id: Some(split_id.0 as u64),
+                    };
                     self.plugin_manager.resolve_callback(
                         fresh_core::api::JsCallbackId::from(req_id),
-                        buffer_id.0.to_string(),
+                        serde_json::to_string(&result).unwrap_or_default(),
                     );
                 }
             }
@@ -4702,6 +4823,13 @@ impl Editor {
                 request_id,
             } => {
                 self.handle_get_buffer_text(buffer_id, start, end, request_id);
+            }
+            PluginCommand::GetLineStartPosition {
+                buffer_id,
+                line,
+                request_id,
+            } => {
+                self.handle_get_line_start_position(buffer_id, line, request_id);
             }
             PluginCommand::SetEditorMode { mode } => {
                 self.handle_set_editor_mode(mode);
@@ -4788,6 +4916,32 @@ impl Editor {
                 self.warning_domains.lsp.clear();
             }
 
+            PluginCommand::SetLspRootUri { language, uri } => {
+                tracing::info!("Plugin setting LSP root URI for {}: {}", language, uri);
+
+                // Parse the URI string into an lsp_types::Uri
+                match uri.parse::<lsp_types::Uri>() {
+                    Ok(parsed_uri) => {
+                        if let Some(ref mut lsp) = self.lsp {
+                            let restarted = lsp.set_language_root_uri(&language, parsed_uri);
+                            if restarted {
+                                self.status_message = Some(format!(
+                                    "LSP root updated for {} (restarting server)",
+                                    language
+                                ));
+                            } else {
+                                self.status_message =
+                                    Some(format!("LSP root set for {}", language));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Invalid LSP root URI '{}': {}", uri, e);
+                        self.status_message = Some(format!("Invalid LSP root URI: {}", e));
+                    }
+                }
+            }
+
             // ==================== Scroll Sync Commands ====================
             PluginCommand::CreateScrollSyncGroup {
                 group_id,
@@ -4855,8 +5009,36 @@ impl Editor {
             PluginCommand::CloseCompositeBuffer { buffer_id } => {
                 self.close_composite_buffer(buffer_id);
             }
+
+            // ==================== File Operations ====================
+            PluginCommand::SaveBufferToPath { buffer_id, path } => {
+                self.handle_save_buffer_to_path(buffer_id, path);
+            }
         }
         Ok(())
+    }
+
+    /// Save a buffer to a specific file path (for :w filename)
+    fn handle_save_buffer_to_path(&mut self, buffer_id: BufferId, path: std::path::PathBuf) {
+        if let Some(state) = self.buffers.get_mut(&buffer_id) {
+            // Save to the specified path
+            match state.buffer.save_to_file(&path) {
+                Ok(()) => {
+                    // Update the buffer's file path so future saves go to the same file
+                    state.buffer.set_file_path(path.clone());
+                    // Run on-save actions (formatting, etc.)
+                    let _ = self.finalize_save(Some(path));
+                    tracing::debug!("Saved buffer {:?} to path", buffer_id);
+                }
+                Err(e) => {
+                    self.handle_set_status(format!("Error saving: {}", e));
+                    tracing::error!("Failed to save buffer to path: {}", e);
+                }
+            }
+        } else {
+            self.handle_set_status(format!("Buffer {:?} not found", buffer_id));
+            tracing::warn!("SaveBufferToPath: buffer {:?} not found", buffer_id);
+        }
     }
 
     /// Execute an editor action by name (for vi mode plugin)
@@ -4946,6 +5128,53 @@ impl Editor {
         self.editor_mode = mode.clone();
         tracing::debug!("Set editor mode: {:?}", mode);
     }
+
+    /// Get the byte offset of the start of a line in the active buffer
+    fn handle_get_line_start_position(&mut self, buffer_id: BufferId, line: u32, request_id: u64) {
+        // Use active buffer if buffer_id is 0
+        let actual_buffer_id = if buffer_id.0 == 0 {
+            self.active_buffer_id()
+        } else {
+            buffer_id
+        };
+
+        let result = if let Some(state) = self.buffers.get_mut(&actual_buffer_id) {
+            // Get line start position by iterating through the buffer content
+            let line_number = line as usize;
+            let buffer_len = state.buffer.len();
+
+            if line_number == 0 {
+                // First line always starts at 0
+                Some(0)
+            } else {
+                // Count newlines to find the start of the requested line
+                let mut current_line = 0;
+                let mut line_start = None;
+
+                // Read buffer content to find newlines using the BufferState's get_text_range
+                let content = state.get_text_range(0, buffer_len);
+                for (byte_idx, c) in content.char_indices() {
+                    if c == '\n' {
+                        current_line += 1;
+                        if current_line == line_number {
+                            // Found the start of the requested line (byte after newline)
+                            line_start = Some(byte_idx + 1);
+                            break;
+                        }
+                    }
+                }
+                line_start
+            }
+        } else {
+            None
+        };
+
+        // Resolve the JavaScript Promise callback directly
+        let callback_id = fresh_core::api::JsCallbackId::from(request_id);
+        // Serialize as JSON (null for None, number for Some)
+        let json = serde_json::to_string(&result).unwrap_or_else(|_| "null".to_string());
+        self.plugin_manager.resolve_callback(callback_id, json);
+    }
 }
 
 /// Parse a key string like "RET", "C-n", "M-x", "q" into KeyCode and KeyModifiers
@@ -5031,6 +5260,11 @@ mod tests {
         (dir_context, temp_dir)
     }
 
+    /// Create a test filesystem
+    fn test_filesystem() -> Arc<dyn FileSystem + Send + Sync> {
+        Arc::new(crate::model::filesystem::StdFileSystem)
+    }
+
     #[test]
     fn test_editor_new() {
         let config = Config::default();
@@ -5041,6 +5275,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5058,6 +5293,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5077,6 +5313,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5100,6 +5337,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5128,6 +5366,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5169,6 +5408,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5215,6 +5455,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5242,6 +5483,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5261,6 +5503,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5301,6 +5544,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5352,6 +5596,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5403,6 +5648,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5443,6 +5689,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5489,6 +5736,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5562,6 +5810,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5600,6 +5849,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5785,6 +6035,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5829,6 +6080,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5868,6 +6120,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5907,6 +6160,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -5955,6 +6209,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -6002,6 +6257,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -6196,6 +6452,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -6203,7 +6460,8 @@ mod tests {
         // Line 0: positions 0-19 (includes newline)
         // Line 1: positions 19-31 (includes newline)
         let initial = "fn foo(val: i32) {\n    val + 1\n}\n";
-        editor.active_state_mut().buffer = Buffer::from_str(initial, 1024 * 1024);
+        editor.active_state_mut().buffer =
+            Buffer::from_str(initial, 1024 * 1024, test_filesystem());
 
         // Simulate LSP rename batch: rename "val" to "value" in two places
         // This is applied in reverse order to preserve positions:
@@ -6343,6 +6601,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
@@ -6350,7 +6609,8 @@ mod tests {
         // Line 0: positions 0-19 (includes newline)
         // Line 1: positions 19-31 (includes newline)
         let initial = "fn foo(val: i32) {\n    val + 1\n}\n";
-        editor.active_state_mut().buffer = Buffer::from_str(initial, 1024 * 1024);
+        editor.active_state_mut().buffer =
+            Buffer::from_str(initial, 1024 * 1024, test_filesystem());
 
         // Position cursor at the second "val" (position 23 = 'v' of "val" on line 1)
         let original_cursor_pos = 23;
@@ -6442,12 +6702,14 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
 
         // Initial content: "fn foo(val: i32) {\n    val + 1\n}\n"
         let initial = "fn foo(val: i32) {\n    val + 1\n}\n";
-        editor.active_state_mut().buffer = Buffer::from_str(initial, 1024 * 1024);
+        editor.active_state_mut().buffer =
+            Buffer::from_str(initial, 1024 * 1024, test_filesystem());
 
         let cursor_id = editor.active_state().cursors.primary_id();
         let buffer_id = editor.active_buffer();
@@ -6624,6 +6886,7 @@ mod tests {
             24,
             dir_context,
             crate::view::color_support::ColorCapability::TrueColor,
+            test_filesystem(),
         )
         .unwrap();
         let split_id = editor.split_manager.active_split();

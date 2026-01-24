@@ -2,6 +2,46 @@
 //!
 //! This module provides a safe, controlled API for plugins (Lua, WASM, etc.)
 //! to interact with the editor without direct access to internal state.
+//!
+//! # Type Safety Architecture
+//!
+//! Rust structs in this module serve as the **single source of truth** for the
+//! TypeScript plugin API. The type safety system works as follows:
+//!
+//! ```text
+//! Rust struct                  Generated TypeScript
+//! ───────────                  ────────────────────
+//! #[derive(TS, Deserialize)]   type ActionPopupOptions = {
+//! #[serde(deny_unknown_fields)]    id: string;
+//! struct ActionPopupOptions {      title: string;
+//!     id: String,                  message: string;
+//!     title: String,               actions: TsActionPopupAction[];
+//!     ...                      };
+//! }
+//! ```
+//!
+//! ## Key Patterns
+//!
+//! 1. **`#[derive(TS)]`** - Generates TypeScript type definitions via ts-rs
+//! 2. **`#[serde(deny_unknown_fields)]`** - Rejects typos/unknown fields at runtime
+//! 3. **`impl FromJs`** - Bridges rquickjs values to typed Rust structs
+//!
+//! ## Validation Layers
+//!
+//! | Layer                  | What it catches                          |
+//! |------------------------|------------------------------------------|
+//! | TypeScript compile     | Wrong field names, missing required fields |
+//! | Rust runtime (serde)   | Typos like `popup_id` instead of `id`    |
+//! | Rust compile           | Type mismatches in method signatures     |
+//!
+//! ## Limitations & Tradeoffs
+//!
+//! - **Manual parsing for complex types**: Some methods (e.g., `submitViewTransform`)
+//!   still use manual object parsing due to enum serialization complexity
+//! - **Two-step deserialization**: Complex nested structs may need
+//!   `rquickjs::Value → serde_json::Value → typed struct` due to rquickjs_serde limits
+//! - **Duplicate attributes**: Both `#[serde(...)]` and `#[ts(...)]` needed since
+//!   they control different things (runtime serialization vs compile-time codegen)
 
 use crate::command::{Command, Suggestion};
 use crate::file_explorer::FileExplorerDecoration;
@@ -94,6 +134,19 @@ impl std::fmt::Display for JsCallbackId {
     }
 }
 
+/// Result of creating a virtual buffer
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, rename_all = "camelCase")]
+pub struct VirtualBufferResult {
+    /// The created buffer ID
+    #[ts(type = "number")]
+    pub buffer_id: u64,
+    /// The split ID (if created in a new split)
+    #[ts(type = "number | null")]
+    pub split_id: Option<u64>,
+}
+
 /// Response from the editor for async plugin operations
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -119,6 +172,12 @@ pub enum PluginResponse {
     BufferText {
         request_id: u64,
         text: Result<String, String>,
+    },
+    /// Response to GetLineStartPosition with the byte offset
+    LineStartPosition {
+        request_id: u64,
+        /// None if line is out of range, Some(offset) for valid line
+        position: Option<usize>,
     },
     /// Response to CreateCompositeBuffer with the created buffer ID
     CompositeBufferCreated {
@@ -184,12 +243,18 @@ pub struct CursorInfo {
 
 /// Specification for an action to execute, with optional repeat count
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct ActionSpec {
     /// Action name (e.g., "move_word_right", "delete_line")
     pub action: String,
     /// Number of times to repeat the action (default 1)
+    #[serde(default = "default_action_count")]
     pub count: u32,
+}
+
+fn default_action_count() -> u32 {
+    1
 }
 
 /// Information about a buffer
@@ -267,7 +332,8 @@ pub struct BufferSavedDiff {
 
 /// Information about the viewport
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, rename_all = "camelCase")]
 pub struct ViewportInfo {
     /// Byte position of the first visible line
     pub top_byte: usize,
@@ -281,7 +347,8 @@ pub struct ViewportInfo {
 
 /// Layout hints supplied by plugins (e.g., Compose mode)
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, rename_all = "camelCase")]
 pub struct LayoutHints {
     /// Optional compose width for centering/wrapping
     pub compose_width: Option<u16>,
@@ -295,6 +362,7 @@ pub struct LayoutHints {
 
 /// Layout configuration for composite buffers
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export, rename = "TsCompositeLayoutConfig")]
 pub struct CompositeLayoutConfig {
     /// Layout type: "side-by-side", "stacked", or "unified"
@@ -305,7 +373,8 @@ pub struct CompositeLayoutConfig {
     #[serde(default)]
     pub ratios: Option<Vec<f32>>,
     /// Show separator between panes
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", rename = "showSeparator")]
+    #[ts(rename = "showSeparator")]
     pub show_separator: bool,
     /// Spacing for stacked layout
     #[serde(default)]
@@ -318,9 +387,12 @@ fn default_true() -> bool {
 
 /// Source pane configuration for composite buffers
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export, rename = "TsCompositeSourceConfig")]
 pub struct CompositeSourceConfig {
-    /// Buffer ID of the source buffer
+    /// Buffer ID of the source buffer (required)
+    #[serde(rename = "bufferId")]
+    #[ts(rename = "bufferId")]
     pub buffer_id: usize,
     /// Label for this pane (e.g., "OLD", "NEW")
     pub label: String,
@@ -334,37 +406,69 @@ pub struct CompositeSourceConfig {
 
 /// Style configuration for a composite pane
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export, rename = "TsCompositePaneStyle")]
 pub struct CompositePaneStyle {
     /// Background color for added lines (RGB)
-    #[serde(default)]
-    #[ts(type = "[number, number, number] | null")]
-    pub add_bg: Option<(u8, u8, u8)>,
+    /// Using [u8; 3] instead of (u8, u8, u8) for better rquickjs_serde compatibility
+    #[serde(default, rename = "addBg")]
+    #[ts(rename = "addBg", type = "[number, number, number] | null")]
+    pub add_bg: Option<[u8; 3]>,
     /// Background color for removed lines (RGB)
-    #[serde(default)]
-    #[ts(type = "[number, number, number] | null")]
-    pub remove_bg: Option<(u8, u8, u8)>,
+    #[serde(default, rename = "removeBg")]
+    #[ts(rename = "removeBg", type = "[number, number, number] | null")]
+    pub remove_bg: Option<[u8; 3]>,
     /// Background color for modified lines (RGB)
-    #[serde(default)]
-    #[ts(type = "[number, number, number] | null")]
-    pub modify_bg: Option<(u8, u8, u8)>,
+    #[serde(default, rename = "modifyBg")]
+    #[ts(rename = "modifyBg", type = "[number, number, number] | null")]
+    pub modify_bg: Option<[u8; 3]>,
     /// Gutter style: "line-numbers", "diff-markers", "both", or "none"
-    #[serde(default)]
+    #[serde(default, rename = "gutterStyle")]
+    #[ts(rename = "gutterStyle")]
     pub gutter_style: Option<String>,
 }
 
 /// Diff hunk for composite buffer alignment
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export, rename = "TsCompositeHunk")]
 pub struct CompositeHunk {
     /// Starting line in old buffer (0-indexed)
+    #[serde(rename = "oldStart")]
+    #[ts(rename = "oldStart")]
     pub old_start: usize,
     /// Number of lines in old buffer
+    #[serde(rename = "oldCount")]
+    #[ts(rename = "oldCount")]
     pub old_count: usize,
     /// Starting line in new buffer (0-indexed)
+    #[serde(rename = "newStart")]
+    #[ts(rename = "newStart")]
     pub new_start: usize,
     /// Number of lines in new buffer
+    #[serde(rename = "newCount")]
+    #[ts(rename = "newCount")]
     pub new_count: usize,
+}
+
+/// Options for creating a composite buffer (used by plugin API)
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export, rename = "TsCreateCompositeBufferOptions")]
+pub struct CreateCompositeBufferOptions {
+    /// Buffer name (displayed in tabs/title)
+    #[serde(default)]
+    pub name: String,
+    /// Mode for keybindings
+    #[serde(default)]
+    pub mode: String,
+    /// Layout configuration
+    pub layout: CompositeLayoutConfig,
+    /// Source pane configurations
+    pub sources: Vec<CompositeSourceConfig>,
+    /// Diff hunks for alignment (optional)
+    #[serde(default)]
+    pub hunks: Option<Vec<CompositeHunk>>,
 }
 
 /// Wire-format view token kind (serialized for plugin transforms)
@@ -386,9 +490,10 @@ pub enum ViewTokenWireKind {
 /// Styling for view tokens (used for injected annotations)
 ///
 /// This allows plugins to specify styling for tokens that don't have a source
-/// mapping (source_offset: None), such as annotation headers in git blame.
-/// For tokens with source_offset: Some(_), syntax highlighting is applied instead.
+/// mapping (sourceOffset: None), such as annotation headers in git blame.
+/// For tokens with sourceOffset: Some(_), syntax highlighting is applied instead.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct ViewTokenStyle {
     /// Foreground color as RGB tuple
@@ -409,14 +514,17 @@ pub struct ViewTokenStyle {
 
 /// Wire-format view token with optional source mapping and styling
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct ViewTokenWire {
     /// Source byte offset in the buffer. None for injected content (annotations).
+    #[ts(type = "number | null")]
     pub source_offset: Option<usize>,
     /// The token content
     pub kind: ViewTokenWireKind,
     /// Optional styling for injected content (only used when source_offset is None)
     #[serde(default)]
+    #[ts(optional)]
     pub style: Option<ViewTokenStyle>,
 }
 
@@ -786,6 +894,14 @@ pub enum PluginCommand {
         initial_value: String,
     },
 
+    /// Start an async prompt that returns result via callback
+    /// The callback_id is used to resolve the promise when the prompt is confirmed or cancelled
+    StartPromptAsync {
+        label: String,
+        initial_value: String,
+        callback_id: JsCallbackId,
+    },
+
     /// Update the suggestions list for the current prompt
     /// Uses the editor's Suggestion type
     SetPromptSuggestions { suggestions: Vec<Suggestion> },
@@ -1045,6 +1161,17 @@ pub enum PluginCommand {
         request_id: u64,
     },
 
+    /// Get byte offset of the start of a line (async)
+    /// Line is 0-indexed (0 = first line)
+    GetLineStartPosition {
+        /// Buffer ID (0 for active buffer)
+        buffer_id: BufferId,
+        /// Line number (0-indexed)
+        line: u32,
+        /// Request ID for async response
+        request_id: u64,
+    },
+
     /// Set the global editor mode (for modal editing like vi mode)
     /// When set, the mode's keybindings take precedence over normal editing
     SetEditorMode {
@@ -1069,6 +1196,16 @@ pub enum PluginCommand {
     DisableLspForLanguage {
         /// The language to disable LSP for (e.g., "python", "rust")
         language: String,
+    },
+
+    /// Set the workspace root URI for a specific language's LSP server
+    /// This allows plugins to specify project roots (e.g., directory containing .csproj)
+    /// If the LSP is already running, it will be restarted with the new root
+    SetLspRootUri {
+        /// The language to set root URI for (e.g., "csharp", "rust")
+        language: String,
+        /// The root URI (file:// URL format)
+        uri: String,
     },
 
     /// Create a scroll sync group for anchor-based synchronized scrolling
@@ -1097,6 +1234,15 @@ pub enum PluginCommand {
         /// The group ID returned by CreateScrollSyncGroup
         group_id: u32,
     },
+
+    /// Save a buffer to a specific file path
+    /// Used by :w filename command to save unnamed buffers or save-as
+    SaveBufferToPath {
+        /// Buffer ID to save
+        buffer_id: BufferId,
+        /// Path to save to
+        path: PathBuf,
+    },
 }
 
 /// Hunk status for Review Diff
@@ -1124,12 +1270,28 @@ pub struct ReviewHunk {
 
 /// Action button for action popups
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export, rename = "TsActionPopupAction")]
 pub struct ActionPopupAction {
     /// Unique action identifier (returned in ActionPopupResult)
     pub id: String,
     /// Display text for the button (can include command hints)
     pub label: String,
+}
+
+/// Options for showActionPopup
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(export)]
+pub struct ActionPopupOptions {
+    /// Unique identifier for the popup (used in ActionPopupResult)
+    pub id: String,
+    /// Title text for the popup
+    pub title: String,
+    /// Body message (supports basic formatting)
+    pub message: String,
+    /// Action buttons to display
+    pub actions: Vec<ActionPopupAction>,
 }
 
 /// Syntax highlight span for a buffer range
@@ -1170,6 +1332,7 @@ pub struct BackgroundProcessResult {
 
 /// Entry for virtual buffer content with optional text properties (JS API version)
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export, rename = "TextPropertyEntry")]
 pub struct JsTextPropertyEntry {
     /// Text content for this entry
@@ -1180,8 +1343,58 @@ pub struct JsTextPropertyEntry {
     pub properties: Option<HashMap<String, JsonValue>>,
 }
 
+/// Directory entry returned by readDir
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DirEntry {
+    /// File/directory name
+    pub name: String,
+    /// True if this is a file
+    pub is_file: bool,
+    /// True if this is a directory
+    pub is_dir: bool,
+}
+
+/// Position in a document (line and character)
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct JsPosition {
+    /// Zero-indexed line number
+    pub line: u32,
+    /// Zero-indexed character offset
+    pub character: u32,
+}
+
+/// Range in a document (start and end positions)
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct JsRange {
+    /// Start position
+    pub start: JsPosition,
+    /// End position
+    pub end: JsPosition,
+}
+
+/// Diagnostic from LSP
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct JsDiagnostic {
+    /// Document URI
+    pub uri: String,
+    /// Diagnostic message
+    pub message: String,
+    /// Severity: 1=Error, 2=Warning, 3=Info, 4=Hint, null=unknown
+    pub severity: Option<u8>,
+    /// Range in the document
+    pub range: JsRange,
+    /// Source of the diagnostic (e.g., "typescript", "eslint")
+    #[ts(optional)]
+    pub source: Option<String>,
+}
+
 /// Options for createVirtualBuffer
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct CreateVirtualBufferOptions {
     /// Buffer name (displayed in tabs/title)
@@ -1218,6 +1431,7 @@ pub struct CreateVirtualBufferOptions {
 
 /// Options for createVirtualBufferInSplit
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct CreateVirtualBufferInSplitOptions {
     /// Buffer name (displayed in tabs/title)
@@ -1266,6 +1480,7 @@ pub struct CreateVirtualBufferInSplitOptions {
 
 /// Options for createVirtualBufferInExistingSplit
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export)]
 pub struct CreateVirtualBufferInExistingSplitOptions {
     /// Buffer name (displayed in tabs/title)
@@ -1362,6 +1577,95 @@ mod fromjs_impls {
         fn into_js(self, ctx: &Ctx<'js>) -> rquickjs::Result<Value<'js>> {
             rquickjs_serde::to_value(ctx.clone(), &self.0)
                 .map_err(|e| rquickjs::Error::new_from_js_message("serialize", "", &e.to_string()))
+        }
+    }
+
+    // === Additional input types for type-safe plugin API ===
+
+    impl<'js> FromJs<'js> for ActionSpec {
+        fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Self> {
+            rquickjs_serde::from_value(value).map_err(|e| rquickjs::Error::FromJs {
+                from: "object",
+                to: "ActionSpec",
+                message: Some(e.to_string()),
+            })
+        }
+    }
+
+    impl<'js> FromJs<'js> for ActionPopupAction {
+        fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Self> {
+            rquickjs_serde::from_value(value).map_err(|e| rquickjs::Error::FromJs {
+                from: "object",
+                to: "ActionPopupAction",
+                message: Some(e.to_string()),
+            })
+        }
+    }
+
+    impl<'js> FromJs<'js> for ActionPopupOptions {
+        fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Self> {
+            rquickjs_serde::from_value(value).map_err(|e| rquickjs::Error::FromJs {
+                from: "object",
+                to: "ActionPopupOptions",
+                message: Some(e.to_string()),
+            })
+        }
+    }
+
+    impl<'js> FromJs<'js> for ViewTokenWire {
+        fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Self> {
+            rquickjs_serde::from_value(value).map_err(|e| rquickjs::Error::FromJs {
+                from: "object",
+                to: "ViewTokenWire",
+                message: Some(e.to_string()),
+            })
+        }
+    }
+
+    impl<'js> FromJs<'js> for ViewTokenStyle {
+        fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Self> {
+            rquickjs_serde::from_value(value).map_err(|e| rquickjs::Error::FromJs {
+                from: "object",
+                to: "ViewTokenStyle",
+                message: Some(e.to_string()),
+            })
+        }
+    }
+
+    impl<'js> FromJs<'js> for LayoutHints {
+        fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Self> {
+            rquickjs_serde::from_value(value).map_err(|e| rquickjs::Error::FromJs {
+                from: "object",
+                to: "LayoutHints",
+                message: Some(e.to_string()),
+            })
+        }
+    }
+
+    impl<'js> FromJs<'js> for CreateCompositeBufferOptions {
+        fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Self> {
+            // Use two-step deserialization for complex nested structures
+            let json: serde_json::Value =
+                rquickjs_serde::from_value(value).map_err(|e| rquickjs::Error::FromJs {
+                    from: "object",
+                    to: "CreateCompositeBufferOptions (json)",
+                    message: Some(e.to_string()),
+                })?;
+            serde_json::from_value(json).map_err(|e| rquickjs::Error::FromJs {
+                from: "json",
+                to: "CreateCompositeBufferOptions",
+                message: Some(e.to_string()),
+            })
+        }
+    }
+
+    impl<'js> FromJs<'js> for CompositeHunk {
+        fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Self> {
+            rquickjs_serde::from_value(value).map_err(|e| rquickjs::Error::FromJs {
+                from: "object",
+                to: "CompositeHunk",
+                message: Some(e.to_string()),
+            })
         }
     }
 }
@@ -2082,5 +2386,67 @@ mod tests {
         assert_eq!(viewport.left_column, 5);
         assert_eq!(viewport.width, 80);
         assert_eq!(viewport.height, 24);
+    }
+
+    #[test]
+    fn test_composite_buffer_options_rejects_unknown_fields() {
+        // Valid JSON with correct field names
+        let valid_json = r#"{
+            "name": "test",
+            "mode": "diff",
+            "layout": {"type": "side-by-side", "ratios": [0.5, 0.5], "showSeparator": true},
+            "sources": [{"bufferId": 1, "label": "old"}]
+        }"#;
+        let result: Result<CreateCompositeBufferOptions, _> = serde_json::from_str(valid_json);
+        assert!(
+            result.is_ok(),
+            "Valid JSON should parse: {:?}",
+            result.err()
+        );
+
+        // Invalid JSON with unknown field (buffer_id instead of bufferId)
+        let invalid_json = r#"{
+            "name": "test",
+            "mode": "diff",
+            "layout": {"type": "side-by-side", "ratios": [0.5, 0.5], "showSeparator": true},
+            "sources": [{"buffer_id": 1, "label": "old"}]
+        }"#;
+        let result: Result<CreateCompositeBufferOptions, _> = serde_json::from_str(invalid_json);
+        assert!(
+            result.is_err(),
+            "JSON with unknown field should fail to parse"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("unknown field") || err.contains("buffer_id"),
+            "Error should mention unknown field: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_composite_hunk_rejects_unknown_fields() {
+        // Valid JSON with correct field names
+        let valid_json = r#"{"oldStart": 0, "oldCount": 5, "newStart": 0, "newCount": 7}"#;
+        let result: Result<CompositeHunk, _> = serde_json::from_str(valid_json);
+        assert!(
+            result.is_ok(),
+            "Valid JSON should parse: {:?}",
+            result.err()
+        );
+
+        // Invalid JSON with unknown field (old_start instead of oldStart)
+        let invalid_json = r#"{"old_start": 0, "oldCount": 5, "newStart": 0, "newCount": 7}"#;
+        let result: Result<CompositeHunk, _> = serde_json::from_str(invalid_json);
+        assert!(
+            result.is_err(),
+            "JSON with unknown field should fail to parse"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("unknown field") || err.contains("old_start"),
+            "Error should mention unknown field: {}",
+            err
+        );
     }
 }

@@ -7,8 +7,10 @@ use ratatui::{
 };
 
 use super::markdown::{parse_markdown, wrap_styled_lines, wrap_text_lines, StyledLine};
+
+pub mod input;
 use super::ui::scrollbar::{render_scrollbar, ScrollbarColors, ScrollbarState};
-use crate::primitives::grammar_registry::GrammarRegistry;
+use crate::primitives::grammar::GrammarRegistry;
 
 /// Clamp a rectangle to fit within bounds, preventing out-of-bounds rendering panics.
 /// Returns a rectangle that is guaranteed to be fully contained within `bounds`.
@@ -47,6 +49,21 @@ pub enum PopupPosition {
     BottomRight,
 }
 
+/// Kind of popup - determines input handling behavior
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopupKind {
+    /// LSP completion popup - supports type-to-filter, Tab/Enter accept
+    Completion,
+    /// Hover/documentation popup - read-only, scroll, dismiss on keypress
+    Hover,
+    /// Action popup with selectable actions - navigate and execute
+    Action,
+    /// Generic list popup
+    List,
+    /// Generic text popup
+    Text,
+}
+
 /// Content of a popup window
 #[derive(Debug, Clone, PartialEq)]
 pub enum PopupContent {
@@ -61,6 +78,43 @@ pub enum PopupContent {
     },
     /// Custom rendered content (just store strings for now)
     Custom(Vec<String>),
+}
+
+/// Text selection within a popup (line, column positions)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PopupTextSelection {
+    /// Start position (line index, column index)
+    pub start: (usize, usize),
+    /// End position (line index, column index)
+    pub end: (usize, usize),
+}
+
+impl PopupTextSelection {
+    /// Get normalized selection (start <= end)
+    pub fn normalized(&self) -> ((usize, usize), (usize, usize)) {
+        if self.start.0 < self.end.0 || (self.start.0 == self.end.0 && self.start.1 <= self.end.1) {
+            (self.start, self.end)
+        } else {
+            (self.end, self.start)
+        }
+    }
+
+    /// Check if a position is within the selection
+    pub fn contains(&self, line: usize, col: usize) -> bool {
+        let ((start_line, start_col), (end_line, end_col)) = self.normalized();
+        if line < start_line || line > end_line {
+            return false;
+        }
+        if line == start_line && line == end_line {
+            col >= start_col && col < end_col
+        } else if line == start_line {
+            col >= start_col
+        } else if line == end_line {
+            col < end_col
+        } else {
+            true
+        }
+    }
 }
 
 /// A single item in a popup list
@@ -112,6 +166,9 @@ impl PopupListItem {
 /// - Quick fixes / code actions
 #[derive(Debug, Clone, PartialEq)]
 pub struct Popup {
+    /// Kind of popup - determines input handling behavior
+    pub kind: PopupKind,
+
     /// Title of the popup (optional)
     pub title: Option<String>,
 
@@ -144,12 +201,16 @@ pub struct Popup {
 
     /// Scroll offset for content (for scrolling through long lists)
     pub scroll_offset: usize,
+
+    /// Text selection for copy/paste (None if no selection)
+    pub text_selection: Option<PopupTextSelection>,
 }
 
 impl Popup {
     /// Create a new popup with text content using theme colors
     pub fn text(content: Vec<String>, theme: &crate::view::theme::Theme) -> Self {
         Self {
+            kind: PopupKind::Text,
             title: None,
             description: None,
             transient: false,
@@ -161,6 +222,7 @@ impl Popup {
             border_style: Style::default().fg(theme.popup_border_fg),
             background_style: Style::default().bg(theme.popup_bg),
             scroll_offset: 0,
+            text_selection: None,
         }
     }
 
@@ -175,6 +237,7 @@ impl Popup {
     ) -> Self {
         let styled_lines = parse_markdown(markdown_text, theme, registry);
         Self {
+            kind: PopupKind::Text,
             title: None,
             description: None,
             transient: false,
@@ -186,12 +249,14 @@ impl Popup {
             border_style: Style::default().fg(theme.popup_border_fg),
             background_style: Style::default().bg(theme.popup_bg),
             scroll_offset: 0,
+            text_selection: None,
         }
     }
 
     /// Create a new popup with a list of items using theme colors
     pub fn list(items: Vec<PopupListItem>, theme: &crate::view::theme::Theme) -> Self {
         Self {
+            kind: PopupKind::List,
             title: None,
             description: None,
             transient: false,
@@ -203,12 +268,19 @@ impl Popup {
             border_style: Style::default().fg(theme.popup_border_fg),
             background_style: Style::default().bg(theme.popup_bg),
             scroll_offset: 0,
+            text_selection: None,
         }
     }
 
     /// Set the title
     pub fn with_title(mut self, title: String) -> Self {
         self.title = Some(title);
+        self
+    }
+
+    /// Set the popup kind (determines input handling behavior)
+    pub fn with_kind(mut self, kind: PopupKind) -> Self {
+        self.kind = kind;
         self
     }
 
@@ -336,7 +408,7 @@ impl Popup {
     /// Scroll by a delta amount (positive = down, negative = up)
     /// Used for mouse wheel scrolling
     pub fn scroll_by(&mut self, delta: i32) {
-        let content_len = self.item_count();
+        let content_len = self.wrapped_item_count();
         let visible = self.visible_height();
         let max_scroll = content_len.saturating_sub(visible);
 
@@ -368,6 +440,113 @@ impl Popup {
             PopupContent::Markdown(lines) => lines.len(),
             PopupContent::List { items, .. } => items.len(),
             PopupContent::Custom(lines) => lines.len(),
+        }
+    }
+
+    /// Get the total number of wrapped lines in the popup
+    ///
+    /// This accounts for line wrapping based on the popup width,
+    /// which is necessary for correct scroll calculations.
+    fn wrapped_item_count(&self) -> usize {
+        // Calculate wrap width same as render: width - borders (2) - scrollbar (2)
+        let border_width = if self.bordered { 2 } else { 0 };
+        let scrollbar_width = 2; // 1 for scrollbar + 1 for spacing
+        let wrap_width = (self.width as usize)
+            .saturating_sub(border_width)
+            .saturating_sub(scrollbar_width);
+
+        if wrap_width == 0 {
+            return self.item_count();
+        }
+
+        match &self.content {
+            PopupContent::Text(lines) => wrap_text_lines(lines, wrap_width).len(),
+            PopupContent::Markdown(styled_lines) => {
+                wrap_styled_lines(styled_lines, wrap_width).len()
+            }
+            // Lists and custom content don't wrap
+            PopupContent::List { items, .. } => items.len(),
+            PopupContent::Custom(lines) => lines.len(),
+        }
+    }
+
+    /// Start text selection at position (used for mouse click)
+    pub fn start_selection(&mut self, line: usize, col: usize) {
+        self.text_selection = Some(PopupTextSelection {
+            start: (line, col),
+            end: (line, col),
+        });
+    }
+
+    /// Extend text selection to position (used for mouse drag)
+    pub fn extend_selection(&mut self, line: usize, col: usize) {
+        if let Some(ref mut sel) = self.text_selection {
+            sel.end = (line, col);
+        }
+    }
+
+    /// Clear text selection
+    pub fn clear_selection(&mut self) {
+        self.text_selection = None;
+    }
+
+    /// Check if popup has active text selection
+    pub fn has_selection(&self) -> bool {
+        if let Some(sel) = &self.text_selection {
+            sel.start != sel.end
+        } else {
+            false
+        }
+    }
+
+    /// Get plain text lines from popup content
+    fn get_text_lines(&self) -> Vec<String> {
+        match &self.content {
+            PopupContent::Text(lines) => lines.clone(),
+            PopupContent::Markdown(styled_lines) => {
+                styled_lines.iter().map(|sl| sl.plain_text()).collect()
+            }
+            PopupContent::List { items, .. } => items.iter().map(|i| i.text.clone()).collect(),
+            PopupContent::Custom(lines) => lines.clone(),
+        }
+    }
+
+    /// Get selected text from popup content
+    pub fn get_selected_text(&self) -> Option<String> {
+        let sel = self.text_selection.as_ref()?;
+        if sel.start == sel.end {
+            return None;
+        }
+
+        let ((start_line, start_col), (end_line, end_col)) = sel.normalized();
+        let lines = self.get_text_lines();
+
+        if start_line >= lines.len() {
+            return None;
+        }
+
+        if start_line == end_line {
+            let line = &lines[start_line];
+            let end_col = end_col.min(line.len());
+            let start_col = start_col.min(end_col);
+            Some(line[start_col..end_col].to_string())
+        } else {
+            let mut result = String::new();
+            // First line from start_col to end
+            let first_line = &lines[start_line];
+            result.push_str(&first_line[start_col.min(first_line.len())..]);
+            result.push('\n');
+            // Middle lines (full)
+            for line in lines.iter().take(end_line).skip(start_line + 1) {
+                result.push_str(line);
+                result.push('\n');
+            }
+            // Last line from start to end_col
+            if end_line < lines.len() {
+                let last_line = &lines[end_line];
+                result.push_str(&last_line[..end_col.min(last_line.len())]);
+            }
+            Some(result)
         }
     }
 
@@ -721,11 +900,33 @@ impl Popup {
             PopupContent::Text(lines) => {
                 // Word-wrap lines to fit content area width
                 let wrapped_lines = wrap_text_lines(lines, content_area.width as usize);
+                let selection_style = Style::default().bg(theme.selection_bg);
+
                 let visible_lines: Vec<Line> = wrapped_lines
                     .iter()
+                    .enumerate()
                     .skip(self.scroll_offset)
                     .take(content_area.height as usize)
-                    .map(|line| Line::from(line.as_str()))
+                    .map(|(line_idx, line)| {
+                        if let Some(ref sel) = self.text_selection {
+                            // Apply selection highlighting
+                            let chars: Vec<char> = line.chars().collect();
+                            let spans: Vec<Span> = chars
+                                .iter()
+                                .enumerate()
+                                .map(|(col, ch)| {
+                                    if sel.contains(line_idx, col) {
+                                        Span::styled(ch.to_string(), selection_style)
+                                    } else {
+                                        Span::raw(ch.to_string())
+                                    }
+                                })
+                                .collect();
+                            Line::from(spans)
+                        } else {
+                            Line::from(line.as_str())
+                        }
+                    })
                     .collect();
 
                 let paragraph = Paragraph::new(visible_lines);
@@ -734,6 +935,7 @@ impl Popup {
             PopupContent::Markdown(styled_lines) => {
                 // Word-wrap styled lines to fit content area width
                 let wrapped_lines = wrap_styled_lines(styled_lines, content_area.width as usize);
+                let selection_style = Style::default().bg(theme.selection_bg);
 
                 // Collect link overlay info for OSC 8 rendering after the main draw
                 // Each entry: (visible_line_idx, start_column, link_text, url)
@@ -741,27 +943,47 @@ impl Popup {
 
                 let visible_lines: Vec<Line> = wrapped_lines
                     .iter()
+                    .enumerate()
                     .skip(self.scroll_offset)
                     .take(content_area.height as usize)
-                    .enumerate()
                     .map(|(line_idx, styled_line)| {
                         let mut col = 0usize;
                         let spans: Vec<Span> = styled_line
                             .spans
                             .iter()
-                            .map(|s| {
+                            .flat_map(|s| {
+                                let span_start_col = col;
                                 let span_width =
                                     unicode_width::UnicodeWidthStr::width(s.text.as_str());
                                 if let Some(url) = &s.link_url {
                                     link_overlays.push((
-                                        line_idx,
+                                        line_idx - self.scroll_offset,
                                         col,
                                         s.text.clone(),
                                         url.clone(),
                                     ));
                                 }
                                 col += span_width;
-                                Span::styled(s.text.clone(), s.style)
+
+                                // Check if any part of this span is selected
+                                if let Some(ref sel) = self.text_selection {
+                                    // Split span into selected/unselected parts
+                                    let chars: Vec<char> = s.text.chars().collect();
+                                    chars
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, ch)| {
+                                            let char_col = span_start_col + i;
+                                            if sel.contains(line_idx, char_col) {
+                                                Span::styled(ch.to_string(), selection_style)
+                                            } else {
+                                                Span::styled(ch.to_string(), s.style)
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()
+                                } else {
+                                    vec![Span::styled(s.text.clone(), s.style)]
+                                }
                             })
                             .collect();
                         Line::from(spans)
@@ -923,8 +1145,21 @@ impl PopupManager {
     /// Check if the topmost popup is a completion popup (supports type-to-filter)
     pub fn is_completion_popup(&self) -> bool {
         self.top()
-            .and_then(|p| p.title.as_ref())
-            .map(|title| title == "Completion")
+            .map(|p| p.kind == PopupKind::Completion)
+            .unwrap_or(false)
+    }
+
+    /// Check if the topmost popup is a hover popup
+    pub fn is_hover_popup(&self) -> bool {
+        self.top()
+            .map(|p| p.kind == PopupKind::Hover)
+            .unwrap_or(false)
+    }
+
+    /// Check if the topmost popup is an action popup
+    pub fn is_action_popup(&self) -> bool {
+        self.top()
+            .map(|p| p.kind == PopupKind::Action)
             .unwrap_or(false)
     }
 
@@ -1013,7 +1248,7 @@ mod tests {
 
     #[test]
     fn test_popup_selection() {
-        let theme = crate::view::theme::Theme::from_name(theme::THEME_DARK).unwrap();
+        let theme = crate::view::theme::Theme::load_builtin(theme::THEME_DARK).unwrap();
         let items = vec![
             PopupListItem::new("item1".to_string()),
             PopupListItem::new("item2".to_string()),
@@ -1045,7 +1280,7 @@ mod tests {
 
     #[test]
     fn test_popup_manager() {
-        let theme = crate::view::theme::Theme::from_name(theme::THEME_DARK).unwrap();
+        let theme = crate::view::theme::Theme::load_builtin(theme::THEME_DARK).unwrap();
         let mut manager = PopupManager::new();
 
         assert!(!manager.is_visible());
@@ -1072,7 +1307,7 @@ mod tests {
 
     #[test]
     fn test_popup_area_calculation() {
-        let theme = crate::view::theme::Theme::from_name(theme::THEME_DARK).unwrap();
+        let theme = crate::view::theme::Theme::load_builtin(theme::THEME_DARK).unwrap();
         let terminal_area = Rect {
             x: 0,
             y: 0,
@@ -1102,7 +1337,7 @@ mod tests {
 
     #[test]
     fn test_popup_fixed_position_clamping() {
-        let theme = crate::view::theme::Theme::from_name(theme::THEME_DARK).unwrap();
+        let theme = crate::view::theme::Theme::load_builtin(theme::THEME_DARK).unwrap();
         let terminal_area = Rect {
             x: 0,
             y: 0,
@@ -1217,5 +1452,91 @@ mod tests {
             second.contains("ay"),
             "second chunk should contain 'ay', got {second:?}"
         );
+    }
+
+    #[test]
+    fn test_popup_text_selection() {
+        let theme = crate::view::theme::Theme::load_builtin(theme::THEME_DARK).unwrap();
+        let mut popup = Popup::text(
+            vec![
+                "Line 0: Hello".to_string(),
+                "Line 1: World".to_string(),
+                "Line 2: Test".to_string(),
+            ],
+            &theme,
+        );
+
+        // Initially no selection
+        assert!(!popup.has_selection());
+        assert_eq!(popup.get_selected_text(), None);
+
+        // Start selection at line 0, col 8 ("Hello" starts at col 8)
+        popup.start_selection(0, 8);
+        assert!(!popup.has_selection()); // Selection start == end
+
+        // Extend selection to line 1, col 8 ("World" starts at col 8)
+        popup.extend_selection(1, 8);
+        assert!(popup.has_selection());
+
+        // Get selected text: "Hello\nLine 1: "
+        let selected = popup.get_selected_text().unwrap();
+        assert_eq!(selected, "Hello\nLine 1: ");
+
+        // Clear selection
+        popup.clear_selection();
+        assert!(!popup.has_selection());
+        assert_eq!(popup.get_selected_text(), None);
+
+        // Test single-line selection
+        popup.start_selection(1, 8);
+        popup.extend_selection(1, 13); // "World"
+        let selected = popup.get_selected_text().unwrap();
+        assert_eq!(selected, "World");
+    }
+
+    #[test]
+    fn test_popup_text_selection_contains() {
+        let sel = PopupTextSelection {
+            start: (1, 5),
+            end: (2, 10),
+        };
+
+        // Line 0 - before selection
+        assert!(!sel.contains(0, 5));
+
+        // Line 1 - start of selection
+        assert!(!sel.contains(1, 4)); // Before start col
+        assert!(sel.contains(1, 5)); // At start
+        assert!(sel.contains(1, 10)); // After start on same line
+
+        // Line 2 - end of selection
+        assert!(sel.contains(2, 0)); // Beginning of last line
+        assert!(sel.contains(2, 9)); // Before end col
+        assert!(!sel.contains(2, 10)); // At end (exclusive)
+        assert!(!sel.contains(2, 11)); // After end
+
+        // Line 3 - after selection
+        assert!(!sel.contains(3, 0));
+    }
+
+    #[test]
+    fn test_popup_text_selection_normalized() {
+        // Forward selection
+        let sel = PopupTextSelection {
+            start: (1, 5),
+            end: (2, 10),
+        };
+        let ((s_line, s_col), (e_line, e_col)) = sel.normalized();
+        assert_eq!((s_line, s_col), (1, 5));
+        assert_eq!((e_line, e_col), (2, 10));
+
+        // Backward selection (user dragged up)
+        let sel_backward = PopupTextSelection {
+            start: (2, 10),
+            end: (1, 5),
+        };
+        let ((s_line, s_col), (e_line, e_col)) = sel_backward.normalized();
+        assert_eq!((s_line, s_col), (1, 5));
+        assert_eq!((e_line, e_col), (2, 10));
     }
 }

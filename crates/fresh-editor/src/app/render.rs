@@ -380,6 +380,7 @@ impl Editor {
                 is_maximized,
                 self.config.editor.relative_line_numbers,
                 self.tab_bar_visible,
+                self.config.editor.use_terminal_bg,
             );
 
         // Detect viewport changes and fire hooks
@@ -553,6 +554,7 @@ impl Editor {
                 Some(HoverTarget::StatusBarLineEndingIndicator) => {
                     StatusBarHover::LineEndingIndicator
                 }
+                Some(HoverTarget::StatusBarLanguageIndicator) => StatusBarHover::LanguageIndicator,
                 _ => StatusBarHover::None,
             };
 
@@ -581,6 +583,7 @@ impl Editor {
             self.cached_layout.status_bar_warning_area = status_bar_layout.warning_badge;
             self.cached_layout.status_bar_line_ending_area =
                 status_bar_layout.line_ending_indicator;
+            self.cached_layout.status_bar_language_area = status_bar_layout.language_indicator;
         }
 
         // Render search options bar when in search prompt
@@ -3587,6 +3590,7 @@ impl Editor {
             self.terminal_width,
             self.terminal_height,
             self.config.editor.large_file_threshold_bytes as usize,
+            std::sync::Arc::clone(&self.filesystem),
         );
         state
             .margins
@@ -3600,6 +3604,7 @@ impl Editor {
             state.buffer = crate::model::buffer::Buffer::from_str(
                 &content,
                 self.config.editor.large_file_threshold_bytes as usize,
+                std::sync::Arc::clone(&self.filesystem),
             );
         }
 
@@ -3660,6 +3665,7 @@ impl Editor {
             self.terminal_width,
             self.terminal_height,
             self.config.editor.large_file_threshold_bytes as usize,
+            std::sync::Arc::clone(&self.filesystem),
         );
         state
             .margins
@@ -3673,6 +3679,7 @@ impl Editor {
             state.buffer = crate::model::buffer::Buffer::from_str(
                 &content,
                 self.config.editor.large_file_threshold_bytes as usize,
+                std::sync::Arc::clone(&self.filesystem),
             );
         }
 
@@ -3796,7 +3803,7 @@ impl Editor {
     /// Called on shutdown to persist history across sessions
     pub fn save_histories(&self) {
         // Ensure data directory exists
-        if let Err(e) = std::fs::create_dir_all(&self.dir_context.data_dir) {
+        if let Err(e) = self.filesystem.create_dir_all(&self.dir_context.data_dir) {
             tracing::warn!("Failed to create data directory: {}", e);
             return;
         }

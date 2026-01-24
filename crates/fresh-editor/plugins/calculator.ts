@@ -711,16 +711,16 @@ globalThis.calculator_open = async function (): Promise<void> {
 
   const entries = renderCalculator();
 
-  state.bufferId = await editor.createVirtualBuffer({
+  const result = await editor.createVirtualBuffer({
     name: "*Calculator*",
     mode: "calculator",
-    read_only: true,
+    readOnly: true,
     entries,
-    show_line_numbers: false,
-    show_cursors: false,
-    editing_disabled: true,
+    showLineNumbers: false,
+    showCursors: false,
+    editingDisabled: true,
   });
-
+  state.bufferId = result.bufferId;
   state.splitId = editor.getActiveSplitId();
 
   editor.setStatus(editor.t("status.opened"));
@@ -767,4 +767,3 @@ editor.on("mouse_move", "onCalculatorMouseMove");
 // Register main command
 editor.registerCommand("%cmd.calculator", "%cmd.calculator_desc", "calculator_open", null);
 
-editor.setStatus(editor.t("status.loaded"));

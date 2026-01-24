@@ -254,6 +254,39 @@ impl PluginThreadHandle {
         })
     }
 
+    /// Check if the plugin thread is still alive
+    pub fn is_alive(&self) -> bool {
+        self.thread_handle
+            .as_ref()
+            .map(|h| !h.is_finished())
+            .unwrap_or(false)
+    }
+
+    /// Check thread health and panic if the plugin thread died due to a panic.
+    /// This propagates plugin thread panics to the calling thread.
+    /// Call this periodically to detect plugin thread failures.
+    pub fn check_thread_health(&mut self) {
+        if let Some(handle) = &self.thread_handle {
+            if handle.is_finished() {
+                tracing::error!(
+                    "check_thread_health: plugin thread is finished, checking for panic"
+                );
+                // Thread finished - take ownership and check result
+                if let Some(handle) = self.thread_handle.take() {
+                    match handle.join() {
+                        Ok(()) => {
+                            tracing::warn!("Plugin thread exited normally (unexpected)");
+                        }
+                        Err(panic_payload) => {
+                            // Re-panic with the original panic message to propagate it
+                            std::panic::resume_unwind(panic_payload);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Deliver a response to a pending async operation in the plugin
     ///
     /// This is called by the editor after processing a command that requires a response.
@@ -265,7 +298,6 @@ impl PluginThreadHandle {
 
         // If not found, it must be a JS callback
         use fresh_core::api::{JsCallbackId, PluginResponse};
-        use serde_json::json;
 
         match response {
             PluginResponse::VirtualBufferCreated {
@@ -273,9 +305,10 @@ impl PluginThreadHandle {
                 buffer_id,
                 split_id,
             } => {
-                let result = json!({
-                    "buffer_id": buffer_id,
-                    "split_id": split_id
+                // Return an object with bufferId and splitId (camelCase for JS)
+                let result = serde_json::json!({
+                    "bufferId": buffer_id.0,
+                    "splitId": split_id.map(|s| s.0)
                 });
                 self.resolve_callback(JsCallbackId(request_id), result.to_string());
             }
@@ -306,10 +339,17 @@ impl PluginThreadHandle {
                 request_id,
                 buffer_id,
             } => {
-                let result = json!({
-                    "buffer_id": buffer_id
-                });
-                self.resolve_callback(JsCallbackId(request_id), result.to_string());
+                // Return just the buffer_id number, not an object
+                self.resolve_callback(JsCallbackId(request_id), buffer_id.0.to_string());
+            }
+            PluginResponse::LineStartPosition {
+                request_id,
+                position,
+            } => {
+                // Return the position as a number or null
+                let result =
+                    serde_json::to_string(&position).unwrap_or_else(|_| "null".to_string());
+                self.resolve_callback(JsCallbackId(request_id), result);
             }
         }
     }
@@ -572,6 +612,7 @@ fn respond_to_pending(
         fresh_core::api::PluginResponse::HighlightsComputed { request_id, .. } => *request_id,
         fresh_core::api::PluginResponse::BufferText { request_id, .. } => *request_id,
         fresh_core::api::PluginResponse::CompositeBufferCreated { request_id, .. } => *request_id,
+        fresh_core::api::PluginResponse::LineStartPosition { request_id, .. } => *request_id,
     };
 
     let sender = {
@@ -665,6 +706,19 @@ async fn plugin_thread_loop(
     let mut has_pending_work = false;
 
     loop {
+        // Check for fatal JS errors (e.g., unhandled promise rejections in test mode)
+        // These are set via set_fatal_js_error() because panicking inside FFI callbacks
+        // is caught by rquickjs and doesn't terminate the thread.
+        if crate::backend::has_fatal_js_error() {
+            if let Some(error_msg) = crate::backend::take_fatal_js_error() {
+                tracing::error!(
+                    "Fatal JS error detected, terminating plugin thread: {}",
+                    error_msg
+                );
+                panic!("Fatal plugin error: {}", error_msg);
+            }
+        }
+
         tokio::select! {
             biased; // Prefer handling requests over polling
 

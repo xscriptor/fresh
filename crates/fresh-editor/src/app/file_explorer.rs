@@ -378,8 +378,7 @@ impl Editor {
 
                     if let Some(runtime) = &self.tokio_runtime {
                         let path_clone = file_path.clone();
-                        let result =
-                            runtime.block_on(async { tokio::fs::File::create(&path_clone).await });
+                        let result = self.filesystem.create_file(&path_clone).map(|_| ());
 
                         match result {
                             Ok(_) => {
@@ -431,8 +430,7 @@ impl Editor {
                     if let Some(runtime) = &self.tokio_runtime {
                         let path_clone = dir_path.clone();
                         let dirname_clone = dirname.clone();
-                        let result =
-                            runtime.block_on(async { tokio::fs::create_dir(&path_clone).await });
+                        let result = self.filesystem.create_dir(&path_clone);
 
                         match result {
                             Ok(_) => {
@@ -597,8 +595,7 @@ impl Editor {
             .unwrap_or_else(|| original_path.clone());
 
         if let Some(runtime) = &self.tokio_runtime {
-            let result =
-                runtime.block_on(async { tokio::fs::rename(&original_path, &new_path).await });
+            let result = self.filesystem.rename(&original_path, &new_path);
 
             match result {
                 Ok(_) => {

@@ -1,4 +1,4 @@
-use super::backend::{FsBackend, FsEntry, FsMetadata};
+use crate::model::filesystem::{DirEntry, FileMetadata, FileSystem};
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
@@ -8,7 +8,7 @@ use tokio::sync::{oneshot, Mutex};
 
 /// Type alias for pending directory requests map
 type PendingDirRequests =
-    Arc<Mutex<HashMap<PathBuf, Vec<oneshot::Sender<io::Result<Vec<FsEntry>>>>>>>;
+    Arc<Mutex<HashMap<PathBuf, Vec<oneshot::Sender<io::Result<Vec<DirEntry>>>>>>>;
 
 /// Manages filesystem operations with request batching and deduplication
 ///
@@ -17,8 +17,11 @@ type PendingDirRequests =
 /// - Request deduplication (multiple requests for the same path)
 /// - Batching of metadata requests
 /// - Centralized error handling
+///
+/// This wraps a `FileSystem` trait object and provides async methods
+/// using `spawn_blocking` internally.
 pub struct FsManager {
-    backend: Arc<dyn FsBackend>,
+    fs: Arc<dyn FileSystem + Send + Sync>,
     /// Pending directory listing requests
     /// Map of path -> list of channels waiting for the result
     pending_dir_requests: PendingDirRequests,
@@ -27,17 +30,17 @@ pub struct FsManager {
 impl fmt::Debug for FsManager {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FsManager")
-            .field("backend", &"<dyn FsBackend>")
+            .field("fs", &"<dyn FileSystem>")
             .field("pending_dir_requests", &"<mutex>")
             .finish()
     }
 }
 
 impl FsManager {
-    /// Create a new filesystem manager with the given backend
-    pub fn new(backend: Arc<dyn FsBackend>) -> Self {
+    /// Create a new filesystem manager with the given filesystem implementation
+    pub fn new(fs: Arc<dyn FileSystem + Send + Sync>) -> Self {
         Self {
-            backend,
+            fs,
             pending_dir_requests: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -47,7 +50,7 @@ impl FsManager {
     /// If multiple requests for the same directory are made concurrently,
     /// only one filesystem operation will be performed and all requesters
     /// will receive the same result.
-    pub async fn list_dir(&self, path: PathBuf) -> io::Result<Vec<FsEntry>> {
+    pub async fn list_dir(&self, path: PathBuf) -> io::Result<Vec<DirEntry>> {
         // Check if there's already a pending request for this path
         let (rx, should_execute) = {
             let mut pending = self.pending_dir_requests.lock().await;
@@ -67,7 +70,11 @@ impl FsManager {
 
         if should_execute {
             // We're responsible for executing the request
-            let result = self.backend.read_dir(&path).await;
+            let fs = Arc::clone(&self.fs);
+            let path_clone = path.clone();
+            let result = tokio::task::spawn_blocking(move || fs.read_dir(&path_clone))
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
             // Notify all waiting requesters
             let mut pending = self.pending_dir_requests.lock().await;
@@ -93,49 +100,125 @@ impl FsManager {
 
     /// Get metadata for multiple paths efficiently
     ///
-    /// This delegates to the backend's batch metadata implementation,
-    /// which may parallelize the operations.
-    pub async fn get_metadata(&self, paths: Vec<PathBuf>) -> Vec<io::Result<FsMetadata>> {
-        self.backend.get_metadata_batch(&paths).await
+    /// This fetches metadata in parallel using spawn_blocking.
+    ///
+    /// Returns a result for each path in the same order as the input.
+    pub async fn get_metadata(&self, paths: Vec<PathBuf>) -> Vec<io::Result<FileMetadata>> {
+        // Spawn parallel tasks for each path
+        let tasks: Vec<_> = paths
+            .into_iter()
+            .map(|path| {
+                let fs = Arc::clone(&self.fs);
+                tokio::task::spawn_blocking(move || fs.metadata(&path))
+            })
+            .collect();
+
+        // Collect results
+        let mut results = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            match task.await {
+                Ok(result) => results.push(result),
+                Err(e) => results.push(Err(io::Error::new(io::ErrorKind::Other, e.to_string()))),
+            }
+        }
+
+        results
     }
 
     /// Get metadata for a single path
-    pub async fn get_single_metadata(&self, path: &Path) -> io::Result<FsMetadata> {
-        let results = self
-            .backend
-            .get_metadata_batch(std::slice::from_ref(&path.to_path_buf()))
-            .await;
-        results
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| Err(io::Error::other("No result returned")))
+    pub async fn get_single_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        let fs = Arc::clone(&self.fs);
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || fs.metadata(&path))
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
     }
 
     /// Check if a path exists
     pub async fn exists(&self, path: &Path) -> bool {
-        self.backend.exists(path).await
+        let fs = Arc::clone(&self.fs);
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || fs.exists(&path))
+            .await
+            .unwrap_or(false)
     }
 
     /// Check if a path is a directory
     pub async fn is_dir(&self, path: &Path) -> io::Result<bool> {
-        self.backend.is_dir(path).await
+        let fs = Arc::clone(&self.fs);
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || fs.is_dir(&path))
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
     }
 
     /// Get a complete entry for a path (with metadata)
-    pub async fn get_entry(&self, path: &Path) -> io::Result<FsEntry> {
-        self.backend.get_entry(path).await
+    pub async fn get_entry(&self, path: &Path) -> io::Result<DirEntry> {
+        let fs = Arc::clone(&self.fs);
+        let path_buf = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let name = path_buf
+                .file_name()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid path"))?
+                .to_string_lossy()
+                .into_owned();
+
+            // Get symlink metadata first to check if it's a symlink
+            let symlink_meta = fs.symlink_metadata(&path_buf)?;
+
+            // Determine entry type
+            let is_symlink = {
+                #[cfg(unix)]
+                {
+                    // Check file type from permissions mode
+                    if let Some(ref perms) = symlink_meta.permissions {
+                        // S_IFLNK = 0o120000
+                        (perms.mode() & 0o170000) == 0o120000
+                    } else {
+                        false
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    false
+                }
+            };
+
+            if is_symlink {
+                // For symlinks, check what they point to
+                let target_is_dir = fs.is_dir(&path_buf).unwrap_or(false);
+                Ok(
+                    DirEntry::new_symlink(path_buf, name, target_is_dir)
+                        .with_metadata(symlink_meta),
+                )
+            } else {
+                // Regular file or directory
+                let entry_type = if fs.is_dir(&path_buf).unwrap_or(false) {
+                    crate::model::filesystem::EntryType::Directory
+                } else {
+                    crate::model::filesystem::EntryType::File
+                };
+                Ok(DirEntry::new(path_buf, name, entry_type).with_metadata(symlink_meta))
+            }
+        })
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
     }
 
     /// Get canonical path
     pub async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        self.backend.canonicalize(path).await
+        let fs = Arc::clone(&self.fs);
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || fs.canonicalize(&path))
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
     }
 
     /// List directory and fetch metadata for all entries in parallel
     ///
     /// This is a convenience method that combines `list_dir` with
     /// `get_metadata` to get complete information about all entries.
-    pub async fn list_dir_with_metadata(&self, path: PathBuf) -> io::Result<Vec<FsEntry>> {
+    pub async fn list_dir_with_metadata(&self, path: PathBuf) -> io::Result<Vec<DirEntry>> {
         let mut entries = self.list_dir(path).await?;
 
         // Collect paths for metadata batch fetch
@@ -154,16 +237,16 @@ impl FsManager {
         Ok(entries)
     }
 
-    /// Get the underlying backend
-    pub fn backend(&self) -> &Arc<dyn FsBackend> {
-        &self.backend
+    /// Get the underlying filesystem implementation
+    pub fn filesystem(&self) -> &Arc<dyn FileSystem + Send + Sync> {
+        &self.fs
     }
 }
 
 impl Clone for FsManager {
     fn clone(&self) -> Self {
         Self {
-            backend: Arc::clone(&self.backend),
+            fs: Arc::clone(&self.fs),
             pending_dir_requests: Arc::clone(&self.pending_dir_requests),
         }
     }
@@ -172,7 +255,7 @@ impl Clone for FsManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::fs::{FsEntryType, LocalFsBackend};
+    use crate::model::filesystem::{EntryType, StdFileSystem};
     use std::fs as std_fs;
     use tempfile::TempDir;
 
@@ -186,8 +269,8 @@ mod tests {
         std_fs::write(temp_path.join("file2.txt"), "content2").unwrap();
         std_fs::create_dir(temp_path.join("subdir")).unwrap();
 
-        let backend = Arc::new(LocalFsBackend::new());
-        let manager = FsManager::new(backend);
+        let fs = Arc::new(StdFileSystem);
+        let manager = FsManager::new(fs);
 
         let entries = manager.list_dir(temp_path.to_path_buf()).await.unwrap();
 
@@ -213,8 +296,8 @@ mod tests {
             .unwrap();
         }
 
-        let backend = Arc::new(LocalFsBackend::new());
-        let manager = FsManager::new(backend);
+        let fs = Arc::new(StdFileSystem);
+        let manager = FsManager::new(fs);
 
         // Spawn multiple concurrent requests for the same directory
         let mut handles = vec![];
@@ -246,8 +329,8 @@ mod tests {
         std_fs::write(temp_path.join("file1.txt"), "content1").unwrap();
         std_fs::write(temp_path.join("file2.txt"), "content2").unwrap();
 
-        let backend = Arc::new(LocalFsBackend::new());
-        let manager = FsManager::new(backend);
+        let fs = Arc::new(StdFileSystem);
+        let manager = FsManager::new(fs);
 
         let paths = vec![temp_path.join("file1.txt"), temp_path.join("file2.txt")];
 
@@ -266,11 +349,11 @@ mod tests {
 
         std_fs::write(&file_path, "content").unwrap();
 
-        let backend = Arc::new(LocalFsBackend::new());
-        let manager = FsManager::new(backend);
+        let fs = Arc::new(StdFileSystem);
+        let manager = FsManager::new(fs);
 
         let metadata = manager.get_single_metadata(&file_path).await.unwrap();
-        assert_eq!(metadata.size, Some(7));
+        assert_eq!(metadata.size, 7);
     }
 
     #[tokio::test]
@@ -279,8 +362,8 @@ mod tests {
         let temp_path = temp_dir.path();
         let file_path = temp_path.join("test.txt");
 
-        let backend = Arc::new(LocalFsBackend::new());
-        let manager = FsManager::new(backend);
+        let fs = Arc::new(StdFileSystem);
+        let manager = FsManager::new(fs);
 
         assert!(!manager.exists(&file_path).await);
 
@@ -299,8 +382,8 @@ mod tests {
         std_fs::write(&file_path, "content").unwrap();
         std_fs::create_dir(&dir_path).unwrap();
 
-        let backend = Arc::new(LocalFsBackend::new());
-        let manager = FsManager::new(backend);
+        let fs = Arc::new(StdFileSystem);
+        let manager = FsManager::new(fs);
 
         assert!(!manager.is_dir(&file_path).await.unwrap());
         assert!(manager.is_dir(&dir_path).await.unwrap());
@@ -314,15 +397,15 @@ mod tests {
 
         std_fs::write(&file_path, "test content").unwrap();
 
-        let backend = Arc::new(LocalFsBackend::new());
-        let manager = FsManager::new(backend);
+        let fs = Arc::new(StdFileSystem);
+        let manager = FsManager::new(fs);
 
         let entry = manager.get_entry(&file_path).await.unwrap();
 
         assert_eq!(entry.name, "test.txt");
-        assert_eq!(entry.entry_type, FsEntryType::File);
+        assert_eq!(entry.entry_type, EntryType::File);
         assert!(entry.metadata.is_some());
-        assert_eq!(entry.metadata.unwrap().size, Some(12));
+        assert_eq!(entry.metadata.unwrap().size, 12);
     }
 
     #[tokio::test]
@@ -334,8 +417,8 @@ mod tests {
         std_fs::write(temp_path.join("file2.txt"), "content2").unwrap();
         std_fs::create_dir(temp_path.join("subdir")).unwrap();
 
-        let backend = Arc::new(LocalFsBackend::new());
-        let manager = FsManager::new(backend);
+        let fs = Arc::new(StdFileSystem);
+        let manager = FsManager::new(fs);
 
         let entries = manager
             .list_dir_with_metadata(temp_path.to_path_buf())
@@ -349,7 +432,7 @@ mod tests {
 
         // Check file sizes
         let file1 = entries.iter().find(|e| e.name == "file1.txt").unwrap();
-        assert_eq!(file1.metadata.as_ref().unwrap().size, Some(8));
+        assert_eq!(file1.metadata.as_ref().unwrap().size, 8);
     }
 
     #[tokio::test]
@@ -370,8 +453,8 @@ mod tests {
             }
         }
 
-        let backend = Arc::new(LocalFsBackend::new());
-        let manager = FsManager::new(backend);
+        let fs = Arc::new(StdFileSystem);
+        let manager = FsManager::new(fs);
 
         // List all directories concurrently
         let mut handles = vec![];

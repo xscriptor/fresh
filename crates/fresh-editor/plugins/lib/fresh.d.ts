@@ -37,6 +37,318 @@ type TextPropertyEntry = {
 	*/
 	properties?: Record<string, unknown>;
 };
+type TsCompositeLayoutConfig = {
+	/**
+	* Layout type: "side-by-side", "stacked", or "unified"
+	*/
+	type: string;
+	/**
+	* Width ratios for side-by-side (e.g., [0.5, 0.5])
+	*/
+	ratios: Array<number> | null;
+	/**
+	* Show separator between panes
+	*/
+	showSeparator: boolean;
+	/**
+	* Spacing for stacked layout
+	*/
+	spacing: number | null;
+};
+type TsCompositeSourceConfig = {
+	/**
+	* Buffer ID of the source buffer (required)
+	*/
+	bufferId: number;
+	/**
+	* Label for this pane (e.g., "OLD", "NEW")
+	*/
+	label: string;
+	/**
+	* Whether this pane is editable
+	*/
+	editable: boolean;
+	/**
+	* Style configuration
+	*/
+	style: TsCompositePaneStyle | null;
+};
+type TsCompositePaneStyle = {
+	/**
+	* Background color for added lines (RGB)
+	* Using [u8; 3] instead of (u8, u8, u8) for better rquickjs_serde compatibility
+	*/
+	addBg: [number, number, number] | null;
+	/**
+	* Background color for removed lines (RGB)
+	*/
+	removeBg: [number, number, number] | null;
+	/**
+	* Background color for modified lines (RGB)
+	*/
+	modifyBg: [number, number, number] | null;
+	/**
+	* Gutter style: "line-numbers", "diff-markers", "both", or "none"
+	*/
+	gutterStyle: string | null;
+};
+type TsCompositeHunk = {
+	/**
+	* Starting line in old buffer (0-indexed)
+	*/
+	oldStart: number;
+	/**
+	* Number of lines in old buffer
+	*/
+	oldCount: number;
+	/**
+	* Starting line in new buffer (0-indexed)
+	*/
+	newStart: number;
+	/**
+	* Number of lines in new buffer
+	*/
+	newCount: number;
+};
+type TsCreateCompositeBufferOptions = {
+	/**
+	* Buffer name (displayed in tabs/title)
+	*/
+	name: string;
+	/**
+	* Mode for keybindings
+	*/
+	mode: string;
+	/**
+	* Layout configuration
+	*/
+	layout: TsCompositeLayoutConfig;
+	/**
+	* Source pane configurations
+	*/
+	sources: Array<TsCompositeSourceConfig>;
+	/**
+	* Diff hunks for alignment (optional)
+	*/
+	hunks: Array<TsCompositeHunk> | null;
+};
+type ViewportInfo = {
+	/**
+	* Byte position of the first visible line
+	*/
+	topByte: number;
+	/**
+	* Left column offset (horizontal scroll)
+	*/
+	leftColumn: number;
+	/**
+	* Viewport width
+	*/
+	width: number;
+	/**
+	* Viewport height
+	*/
+	height: number;
+};
+type LayoutHints = {
+	/**
+	* Optional compose width for centering/wrapping
+	*/
+	composeWidth: number | null;
+	/**
+	* Optional column guides for aligned tables
+	*/
+	columnGuides: Array<number> | null;
+};
+type ViewTokenWire = {
+	/**
+	* Source byte offset in the buffer. None for injected content (annotations).
+	*/
+	source_offset: number | null;
+	/**
+	* The token content
+	*/
+	kind: ViewTokenWireKind;
+	/**
+	* Optional styling for injected content (only used when source_offset is None)
+	*/
+	style?: ViewTokenStyle;
+};
+type ViewTokenWireKind = {
+	"Text": string;
+} | "Newline" | "Space" | "Break" | {
+	"BinaryByte": number;
+};
+type ViewTokenStyle = {
+	/**
+	* Foreground color as RGB tuple
+	*/
+	fg: [number, number, number] | null;
+	/**
+	* Background color as RGB tuple
+	*/
+	bg: [number, number, number] | null;
+	/**
+	* Whether to render in bold
+	*/
+	bold: boolean;
+	/**
+	* Whether to render in italic
+	*/
+	italic: boolean;
+};
+type PromptSuggestion = {
+	/**
+	* The text to display
+	*/
+	text: string;
+	/**
+	* Optional description
+	*/
+	description?: string;
+	/**
+	* The value to use when selected (defaults to text if None)
+	*/
+	value?: string;
+	/**
+	* Whether this suggestion is disabled (greyed out, defaults to false)
+	*/
+	disabled?: boolean;
+	/**
+	* Optional keyboard shortcut
+	*/
+	keybinding?: string;
+};
+type DirEntry = {
+	/**
+	* File/directory name
+	*/
+	name: string;
+	/**
+	* True if this is a file
+	*/
+	is_file: boolean;
+	/**
+	* True if this is a directory
+	*/
+	is_dir: boolean;
+};
+type BufferInfo = {
+	/**
+	* Buffer ID
+	*/
+	id: number;
+	/**
+	* File path (if any)
+	*/
+	path: string;
+	/**
+	* Whether the buffer has been modified
+	*/
+	modified: boolean;
+	/**
+	* Length of buffer in bytes
+	*/
+	length: number;
+};
+type JsDiagnostic = {
+	/**
+	* Document URI
+	*/
+	uri: string;
+	/**
+	* Diagnostic message
+	*/
+	message: string;
+	/**
+	* Severity: 1=Error, 2=Warning, 3=Info, 4=Hint, null=unknown
+	*/
+	severity: number | null;
+	/**
+	* Range in the document
+	*/
+	range: JsRange;
+	/**
+	* Source of the diagnostic (e.g., "typescript", "eslint")
+	*/
+	source?: string;
+};
+type JsRange = {
+	/**
+	* Start position
+	*/
+	start: JsPosition;
+	/**
+	* End position
+	*/
+	end: JsPosition;
+};
+type JsPosition = {
+	/**
+	* Zero-indexed line number
+	*/
+	line: number;
+	/**
+	* Zero-indexed character offset
+	*/
+	character: number;
+};
+type ActionSpec = {
+	/**
+	* Action name (e.g., "move_word_right", "delete_line")
+	*/
+	action: string;
+	/**
+	* Number of times to repeat the action (default 1)
+	*/
+	count: number;
+};
+type TsActionPopupAction = {
+	/**
+	* Unique action identifier (returned in ActionPopupResult)
+	*/
+	id: string;
+	/**
+	* Display text for the button (can include command hints)
+	*/
+	label: string;
+};
+type ActionPopupOptions = {
+	/**
+	* Unique identifier for the popup (used in ActionPopupResult)
+	*/
+	id: string;
+	/**
+	* Title text for the popup
+	*/
+	title: string;
+	/**
+	* Body message (supports basic formatting)
+	*/
+	message: string;
+	/**
+	* Action buttons to display
+	*/
+	actions: Array<TsActionPopupAction>;
+};
+type FileExplorerDecoration = {
+	/**
+	* File path to decorate
+	*/
+	path: string;
+	/**
+	* Symbol to display (e.g., "●", "M", "A")
+	*/
+	symbol: string;
+	/**
+	* Color as RGB array (rquickjs_serde requires array, not tuple)
+	*/
+	color: [number, number, number];
+	/**
+	* Priority for display when multiple decorations exist (higher wins)
+	*/
+	priority: number;
+};
 type BackgroundProcessResult = {
 	/**
 	* Unique process ID for later reference
@@ -52,6 +364,46 @@ type BufferSavedDiff = {
 	equal: boolean;
 	byte_ranges: Array<[number, number]>;
 	line_ranges: Array<[number, number]> | null;
+};
+type TsCompositeHunk = {
+	/**
+	* Starting line in old buffer (0-indexed)
+	*/
+	oldStart: number;
+	/**
+	* Number of lines in old buffer
+	*/
+	oldCount: number;
+	/**
+	* Starting line in new buffer (0-indexed)
+	*/
+	newStart: number;
+	/**
+	* Number of lines in new buffer
+	*/
+	newCount: number;
+};
+type TsCreateCompositeBufferOptions = {
+	/**
+	* Buffer name (displayed in tabs/title)
+	*/
+	name: string;
+	/**
+	* Mode for keybindings
+	*/
+	mode: string;
+	/**
+	* Layout configuration
+	*/
+	layout: TsCompositeLayoutConfig;
+	/**
+	* Source pane configurations
+	*/
+	sources: Array<TsCompositeSourceConfig>;
+	/**
+	* Diff hunks for alignment (optional)
+	*/
+	hunks: Array<TsCompositeHunk> | null;
 };
 type CreateVirtualBufferInExistingSplitOptions = {
 	/**
@@ -185,6 +537,28 @@ type SpawnResult = {
 	*/
 	exit_code: number;
 };
+type PromptSuggestion = {
+	/**
+	* The text to display
+	*/
+	text: string;
+	/**
+	* Optional description
+	*/
+	description?: string;
+	/**
+	* The value to use when selected (defaults to text if None)
+	*/
+	value?: string;
+	/**
+	* Whether this suggestion is disabled (greyed out, defaults to false)
+	*/
+	disabled?: boolean;
+	/**
+	* Optional keyboard shortcut
+	*/
+	keybinding?: string;
+};
 type TextPropertiesAtCursor = Array<Record<string, unknown>>;
 type TsHighlightSpan = {
 	start: number;
@@ -192,6 +566,16 @@ type TsHighlightSpan = {
 	color: [number, number, number];
 	bold: boolean;
 	italic: boolean;
+};
+type VirtualBufferResult = {
+	/**
+	* The created buffer ID
+	*/
+	bufferId: number;
+	/**
+	* The split ID (if created in a new split)
+	*/
+	splitId: number | null;
 };
 /**
 * Main editor API interface
@@ -208,7 +592,7 @@ interface EditorAPI {
 	/**
 	* List all open buffers - returns array of BufferInfo objects
 	*/
-	listBuffers(): unknown;
+	listBuffers(): BufferInfo[];
 	debug(msg: string): void;
 	info(msg: string): void;
 	warn(msg: string): void;
@@ -217,7 +601,7 @@ interface EditorAPI {
 	copyToClipboard(text: string): void;
 	setClipboard(text: string): void;
 	/**
-	* Register a command - reads plugin name from __currentPluginName__ global
+	* Register a command - reads plugin name from __pluginName__ global
 	* context is optional - can be omitted, null, undefined, or a string
 	*/
 	registerCommand(name: string, description: string, handlerName: string, context?: unknown): boolean;
@@ -234,7 +618,7 @@ interface EditorAPI {
 	*/
 	executeAction(actionName: string): boolean;
 	/**
-	* Translate a string - reads plugin name from __currentPluginName__ global
+	* Translate a string - reads plugin name from __pluginName__ global
 	* Args is optional - can be omitted, undefined, null, or an object
 	*/
 	t(key: string, ...args: unknown[]): string;
@@ -255,9 +639,14 @@ interface EditorAPI {
 	*/
 	isBufferModified(bufferId: number): boolean;
 	/**
+	* Save a buffer to a specific file path
+	* Used by :w filename to save unnamed buffers or save-as
+	*/
+	saveBufferToPath(bufferId: number, path: string): boolean;
+	/**
 	* Get buffer info by ID
 	*/
-	getBufferInfo(bufferId: number): unknown;
+	getBufferInfo(bufferId: number): BufferInfo | null;
 	/**
 	* Get primary cursor info for active buffer
 	*/
@@ -273,11 +662,16 @@ interface EditorAPI {
 	/**
 	* Get viewport info for active buffer
 	*/
-	getViewport(): unknown;
+	getViewport(): ViewportInfo | null;
 	/**
 	* Get the line number (0-indexed) of the primary cursor
 	*/
 	getCursorLine(): number;
+	/**
+	* Get the byte offset of the start of a line (0-indexed line number)
+	* Returns null if the line number is out of range
+	*/
+	getLineStartPosition(line: number): Promise<number | null>;
 	/**
 	* Find buffer by file path, returns buffer ID or 0 if not found
 	*/
@@ -332,6 +726,7 @@ interface EditorAPI {
 	getCwd(): string;
 	/**
 	* Join path components (variadic - accepts multiple string arguments)
+	* Always uses forward slashes for cross-platform consistency (like Node.js path.posix.join)
 	*/
 	pathJoin(...parts: string[]): string;
 	/**
@@ -365,7 +760,7 @@ interface EditorAPI {
 	/**
 	* Read directory contents (returns array of {name, is_file, is_dir})
 	*/
-	readDir(path: string): unknown;
+	readDir(path: string): DirEntry[];
 	/**
 	* Get current config as JS object
 	*/
@@ -409,7 +804,7 @@ interface EditorAPI {
 	/**
 	* Check if a background process is still running
 	*/
-	isProcessRunning(processId: number): boolean;
+	isProcessRunning(ProcessId: number): boolean;
 	/**
 	* Kill a process by ID (alias for killBackgroundProcess)
 	*/
@@ -420,12 +815,17 @@ interface EditorAPI {
 	pluginTranslate(pluginName: string, key: string, args?: Record<string, unknown>): string;
 	/**
 	* Create a composite buffer (async)
+	* 
+	* Uses typed CreateCompositeBufferOptions - serde validates field names at runtime
+	* via `deny_unknown_fields` attribute
 	*/
-	createCompositeBuffer(opts: Record<string, unknown>): Promise<number>;
+	createCompositeBuffer(opts: CreateCompositeBufferOptions): Promise<number>;
 	/**
 	* Update alignment hunks for a composite buffer
+	* 
+	* Uses typed Vec<CompositeHunk> - serde validates field names at runtime
 	*/
-	updateCompositeAlignment(bufferId: number, hunks: Record<string, unknown>[]): boolean;
+	updateCompositeAlignment(bufferId: number, hunks: CompositeHunk[]): boolean;
 	/**
 	* Close a composite buffer
 	*/
@@ -456,6 +856,9 @@ interface EditorAPI {
 	removeOverlay(bufferId: number, handle: string): boolean;
 	/**
 	* Submit a view transform for a buffer/split
+	* 
+	* Note: tokens should be ViewTokenWire[], layoutHints should be LayoutHints
+	* These use manual parsing due to complex enum handling
 	*/
 	submitViewTransform(bufferId: number, splitId: number | null, start: number, end: number, tokens: Record<string, unknown>[], LayoutHints?: Record<string, unknown>): boolean;
 	/**
@@ -495,6 +898,11 @@ interface EditorAPI {
 	*/
 	addVirtualLine(bufferId: number, position: number, text: string, fgR: number, fgG: number, fgB: number, bgR: number, bgG: number, bgB: number, above: boolean, namespace: string, priority: number): boolean;
 	/**
+	* Show a prompt and wait for user input (async)
+	* Returns the user input or null if cancelled
+	*/
+	prompt(label: string, initialValue: string): Promise<string | null>;
+	/**
 	* Start an interactive prompt
 	*/
 	startPrompt(label: string, promptType: string): boolean;
@@ -503,9 +911,11 @@ interface EditorAPI {
 	*/
 	startPromptWithInitial(label: string, promptType: string, initialValue: string): boolean;
 	/**
-	* Set suggestions for the current prompt (takes array of suggestion objects)
+	* Set suggestions for the current prompt
+	* 
+	* Uses typed Vec<Suggestion> - serde validates field names at runtime
 	*/
-	setPromptSuggestions(suggestionsArr: Record<string, unknown>[]): boolean;
+	setPromptSuggestions(suggestions: Suggestion[]): boolean;
 	/**
 	* Define a buffer mode (takes bindings as array of [key, command] pairs)
 	*/
@@ -572,38 +982,49 @@ interface EditorAPI {
 	removeScrollSyncGroup(groupId: number): boolean;
 	/**
 	* Execute multiple actions in sequence
+	* 
+	* Takes typed ActionSpec array - serde validates field names at runtime
 	*/
-	executeActions(actions: Record<string, unknown>[]): boolean;
+	executeActions(actions: ActionSpec[]): boolean;
 	/**
 	* Show an action popup
+	* 
+	* Takes a typed ActionPopupOptions struct - serde validates field names at runtime
 	*/
-	showActionPopup(opts: Record<string, unknown>): boolean;
+	showActionPopup(opts: ActionPopupOptions): boolean;
 	/**
 	* Disable LSP for a specific language
 	*/
 	disableLspForLanguage(language: string): boolean;
 	/**
+	* Set the workspace root URI for a specific language's LSP server
+	* This allows plugins to specify project roots (e.g., directory containing .csproj)
+	*/
+	setLspRootUri(language: string, uri: string): boolean;
+	/**
 	* Get all diagnostics from LSP
 	*/
-	getAllDiagnostics(): unknown;
+	getAllDiagnostics(): JsDiagnostic[];
 	/**
 	* Get registered event handlers for an event
 	*/
 	getHandlers(eventName: string): string[];
 	/**
-	* Create a virtual buffer in current split (async, returns buffer ID)
+	* Create a virtual buffer in current split (async, returns buffer and split IDs)
 	*/
-	createVirtualBuffer(opts: CreateVirtualBufferOptions): Promise<number>;
+	createVirtualBuffer(opts: CreateVirtualBufferOptions): Promise<VirtualBufferResult>;
 	/**
-	* Create a virtual buffer in a new split (async, returns request_id)
+	* Create a virtual buffer in a new split (async, returns buffer and split IDs)
 	*/
-	createVirtualBufferInSplit(opts: CreateVirtualBufferInSplitOptions): Promise<number>;
+	createVirtualBufferInSplit(opts: CreateVirtualBufferInSplitOptions): Promise<VirtualBufferResult>;
 	/**
-	* Create a virtual buffer in an existing split (async, returns request_id)
+	* Create a virtual buffer in an existing split (async, returns buffer and split IDs)
 	*/
-	createVirtualBufferInExistingSplit(opts: CreateVirtualBufferInExistingSplitOptions): Promise<number>;
+	createVirtualBufferInExistingSplit(opts: CreateVirtualBufferInExistingSplitOptions): Promise<VirtualBufferResult>;
 	/**
 	* Set virtual buffer content (takes array of entry objects)
+	* 
+	* Note: entries should be TextPropertyEntry[] - uses manual parsing for HashMap support
 	*/
 	setVirtualBufferContent(bufferId: number, entriesArr: Record<string, unknown>[]): boolean;
 	/**

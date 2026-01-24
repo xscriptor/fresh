@@ -66,14 +66,19 @@ impl Editor {
         let old_locale = self.config.locale.clone();
         let old_plugins = self.config.plugins.clone();
 
-        // Get target layer and new config
-        let (target_layer, new_config) = {
+        // Get target layer, new config, and the actual changes made
+        let (target_layer, new_config, pending_changes, pending_deletions) = {
             if let Some(ref state) = self.settings_state {
                 if !state.has_changes() {
                     return;
                 }
                 match state.apply_changes(&self.config) {
-                    Ok(config) => (state.target_layer, config),
+                    Ok(config) => (
+                        state.target_layer,
+                        config,
+                        state.pending_changes.clone(),
+                        state.pending_deletions.clone(),
+                    ),
                     Err(e) => {
                         self.set_status_message(
                             t!("settings.failed_to_apply", error = e.to_string()).to_string(),
@@ -91,7 +96,9 @@ impl Editor {
 
         // Apply runtime changes
         if old_theme != self.config.theme {
-            if let Some(theme) = crate::view::theme::Theme::from_name(&self.config.theme) {
+            let theme_loader = crate::view::theme::LocalThemeLoader::new();
+            if let Some(theme) = crate::view::theme::Theme::load(&self.config.theme, &theme_loader)
+            {
                 self.theme = theme;
                 tracing::info!("Theme changed to '{}'", self.config.theme.0);
             } else {
@@ -125,7 +132,7 @@ impl Editor {
         // Update keybindings
         self.keybindings = KeybindingResolver::new(&self.config);
 
-        // Save to disk using the appropriate layer
+        // Save ONLY the changes to disk (preserves external edits to the config file)
         let resolver = ConfigResolver::new(self.dir_context.clone(), self.working_dir.clone());
 
         let layer_name = match target_layer {
@@ -135,7 +142,7 @@ impl Editor {
             ConfigLayer::System => "System", // Should never happen
         };
 
-        match resolver.save_to_layer(&new_config, target_layer) {
+        match resolver.save_changes_to_layer(&pending_changes, &pending_deletions, target_layer) {
             Ok(()) => {
                 self.set_status_message(
                     t!("settings.saved_to_layer", layer = layer_name).to_string(),
@@ -179,11 +186,11 @@ impl Editor {
 
         // Create parent directory if needed
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            self.filesystem.create_dir_all(parent)?;
         }
 
         // Create file with template if it doesn't exist
-        if !path.exists() {
+        if !self.filesystem.exists(&path) {
             let template = match layer {
                 ConfigLayer::User => {
                     r#"{
@@ -214,7 +221,7 @@ impl Editor {
                 }
                 ConfigLayer::System => unreachable!(),
             };
-            std::fs::write(&path, template)?;
+            self.filesystem.write_file(&path, template.as_bytes())?;
         }
 
         // Close settings and open the config file
@@ -356,8 +363,10 @@ impl Editor {
                     if let Some(item) = state.current_item_mut() {
                         if let SettingControl::Map(ref mut map_state) = item.control {
                             if map_state.focused_entry.is_none() {
-                                // On add-new row: start editing to add new entry
-                                state.start_editing();
+                                // On add-new row: open dialog with empty key
+                                if map_state.value_schema.is_some() {
+                                    state.open_add_entry_dialog();
+                                }
                             } else if map_state.value_schema.is_some() {
                                 // Map has schema: open entry dialog
                                 state.open_entry_dialog();

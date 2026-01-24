@@ -29,20 +29,42 @@ pub struct Command {
 
 /// A single suggestion item for autocomplete
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export)]
+#[serde(deny_unknown_fields)]
+#[ts(export, rename = "PromptSuggestion")]
 pub struct Suggestion {
     /// The text to display
     pub text: String,
     /// Optional description
+    #[serde(default)]
+    #[ts(optional)]
     pub description: Option<String>,
     /// The value to use when selected (defaults to text if None)
+    #[serde(default)]
+    #[ts(optional)]
     pub value: Option<String>,
-    /// Whether this suggestion is disabled (greyed out)
-    pub disabled: bool,
+    /// Whether this suggestion is disabled (greyed out, defaults to false)
+    #[serde(default)]
+    #[ts(optional)]
+    pub disabled: Option<bool>,
     /// Optional keyboard shortcut
+    #[serde(default)]
+    #[ts(optional)]
     pub keybinding: Option<String>,
-    /// Source of the command (for command palette)
+    /// Source of the command (for command palette) - internal, not settable by plugins
+    #[serde(skip)]
+    #[ts(skip)]
     pub source: Option<CommandSource>,
+}
+
+#[cfg(feature = "plugins")]
+impl<'js> rquickjs::FromJs<'js> for Suggestion {
+    fn from_js(_ctx: &rquickjs::Ctx<'js>, value: rquickjs::Value<'js>) -> rquickjs::Result<Self> {
+        rquickjs_serde::from_value(value).map_err(|e| rquickjs::Error::FromJs {
+            from: "object",
+            to: "Suggestion",
+            message: Some(e.to_string()),
+        })
+    }
 }
 
 impl Suggestion {
@@ -51,9 +73,14 @@ impl Suggestion {
             text,
             description: None,
             value: None,
-            disabled: false,
+            disabled: None,
             keybinding: None,
             source: None,
         }
+    }
+
+    /// Check if this suggestion is disabled
+    pub fn is_disabled(&self) -> bool {
+        self.disabled.unwrap_or(false)
     }
 }

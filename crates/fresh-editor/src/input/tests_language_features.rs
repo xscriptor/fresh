@@ -1,5 +1,11 @@
 #[cfg(test)]
 mod tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use crate::input::actions::get_auto_close_char;
     use crate::input::multi_cursor::{add_cursor_at_next_match, AddCursorResult};
     use crate::model::buffer::Buffer;
@@ -31,7 +37,7 @@ mod tests {
 
     #[test]
     fn test_word_movement_punctuation() {
-        let buffer = Buffer::from_str("foo.bar_baz", 0);
+        let buffer = Buffer::from_str("foo.bar_baz", 0, test_fs());
 
         // "foo|.bar_baz" -> Right -> "foo.|bar_baz"
         // Starting at 3 (after 'foo')
@@ -57,7 +63,7 @@ mod tests {
     #[test]
     fn test_word_movement_whitespace_punctuation() {
         // "a . b"
-        let buffer = Buffer::from_str("a . b", 0);
+        let buffer = Buffer::from_str("a . b", 0, test_fs());
 
         // 0 ('a') -> Word. Ends at 1. Skip whitespace -> 2 ('.')
         assert_eq!(find_word_start_right(&buffer, 0), 2);
@@ -69,7 +75,7 @@ mod tests {
     #[test]
     fn test_word_movement_left() {
         // "foo.bar"
-        let buffer = Buffer::from_str("foo.bar", 0);
+        let buffer = Buffer::from_str("foo.bar", 0, test_fs());
 
         // 7 (end) -> Left -> 4 ('b')
         // 'bar' is word.
@@ -106,9 +112,9 @@ mod tests {
 
     // Helper to create a basic editor state
     fn create_state(content: &str) -> EditorState {
-        let mut state = EditorState::new(0, 0, 1024 * 1024); // sizes don't matter for these tests
-                                                             // Manually replace buffer
-        let buffer = Buffer::from_str(content, 0);
+        let mut state = EditorState::new(0, 0, 1024 * 1024, test_fs()); // sizes don't matter for these tests
+                                                                        // Manually replace buffer
+        let buffer = Buffer::from_str(content, 0, test_fs());
         // We need to swap the buffer. EditorState fields are public?
         state.buffer = buffer;
         state

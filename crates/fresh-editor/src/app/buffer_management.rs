@@ -11,6 +11,7 @@
 use anyhow::Result as AnyhowResult;
 use rust_i18n::t;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::app::warning_domains::WarningDomain;
 use crate::model::event::{BufferId, Event, SplitId};
@@ -120,6 +121,12 @@ impl Editor {
         };
         let path = canonical_path.as_path();
 
+        // Check if the path is a directory (after following symlinks via canonicalize)
+        // Directories cannot be opened as files in the editor
+        if path.is_dir() {
+            anyhow::bail!(t!("buffer.cannot_open_directory"));
+        }
+
         // Check if file is already open - return existing buffer without switching
         let already_open = self
             .buffers
@@ -160,6 +167,7 @@ impl Editor {
                 self.config.editor.large_file_threshold_bytes as usize,
                 &self.grammar_registry,
                 &self.config.languages,
+                Arc::clone(&self.filesystem),
             )?
         } else {
             // File doesn't exist - create empty buffer with the file path set
@@ -167,6 +175,7 @@ impl Editor {
                 self.terminal_width,
                 self.terminal_height,
                 self.config.editor.large_file_threshold_bytes as usize,
+                Arc::clone(&self.filesystem),
             );
             // Set the file path so saving will create the file
             new_state.buffer.set_file_path(path.to_path_buf());
@@ -436,6 +445,7 @@ impl Editor {
             self.terminal_width,
             self.terminal_height,
             self.config.editor.large_file_threshold_bytes as usize,
+            Arc::clone(&self.filesystem),
         );
         // Note: line_wrap_enabled is set on SplitViewState.viewport when the split is created
         state
@@ -509,7 +519,7 @@ impl Editor {
         };
 
         // Get file size for status message before loading
-        let file_size = std::fs::metadata(temp_path)?.len() as usize;
+        let file_size = self.filesystem.metadata(temp_path)?.size as usize;
 
         // Load from temp file using EditorState::from_file_with_languages
         // This enables lazy chunk loading for large inputs (>100MB by default)
@@ -520,6 +530,7 @@ impl Editor {
             self.config.editor.large_file_threshold_bytes as usize,
             &self.grammar_registry,
             &self.config.languages,
+            Arc::clone(&self.filesystem),
         )?;
 
         // Clear the file path so the buffer is "unnamed" for save purposes
@@ -586,8 +597,10 @@ impl Editor {
         let mut changed = false;
 
         // Check current file size
-        let current_size = std::fs::metadata(&stream_state.temp_path)
-            .map(|m| m.len() as usize)
+        let current_size = self
+            .filesystem
+            .metadata(&stream_state.temp_path)
+            .map(|m| m.size as usize)
             .unwrap_or(stream_state.last_known_size);
 
         // If file grew, extend the buffer
@@ -644,8 +657,10 @@ impl Editor {
             stream_state.complete = true;
 
             // Final poll to get any remaining data
-            let final_size = std::fs::metadata(&stream_state.temp_path)
-                .map(|m| m.len() as usize)
+            let final_size = self
+                .filesystem
+                .metadata(&stream_state.temp_path)
+                .map(|m| m.size as usize)
                 .unwrap_or(stream_state.last_known_size);
 
             if final_size > stream_state.last_known_size {
@@ -692,6 +707,7 @@ impl Editor {
             self.terminal_width,
             self.terminal_height,
             self.config.editor.large_file_threshold_bytes as usize,
+            Arc::clone(&self.filesystem),
         );
         // Note: line_wrap_enabled is set on SplitViewState.viewport when the split is created
 
@@ -993,12 +1009,12 @@ impl Editor {
             // Clean up backing/rendering file
             let backing_file = self.terminal_backing_files.remove(&terminal_id);
             if let Some(ref path) = backing_file {
-                let _ = std::fs::remove_file(path);
+                let _ = self.filesystem.remove_file(path);
             }
             // Clean up raw log file
             if let Some(log_file) = self.terminal_log_files.remove(&terminal_id) {
                 if backing_file.as_ref() != Some(&log_file) {
-                    let _ = std::fs::remove_file(&log_file);
+                    let _ = self.filesystem.remove_file(&log_file);
                 }
             }
 

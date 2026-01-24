@@ -16,15 +16,30 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             arch: amd64
             rpm_arch: x86_64
-            runner: ubuntu-20.04
+            runner: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             arch: arm64
             rpm_arch: aarch64
-            runner: ubuntu-20.04
+            runner: ubuntu-latest
     runs-on: ${{ matrix.runner }}
+    container:
+      image: ubuntu:20.04
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      DEBIAN_FRONTEND: noninteractive
     steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            git \
+            build-essential \
+            binutils \
+            pkg-config \
+            libclang-dev
+
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
@@ -42,8 +57,12 @@ jobs:
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            binutils-aarch64-linux-gnu
 
       - name: Install cargo-deb and cargo-generate-rpm
         run: |
@@ -53,6 +72,7 @@ jobs:
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+            export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/usr/aarch64-linux-gnu"
           fi
           cargo build --release --target ${{ matrix.target }}
 

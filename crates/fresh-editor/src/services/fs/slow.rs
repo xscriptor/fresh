@@ -1,33 +1,32 @@
-//! Slow filesystem backend for testing
+//! Slow filesystem wrapper for testing
 //!
-//! This module provides a decorator/wrapper around any FsBackend that adds
+//! This module provides a decorator/wrapper around any FileSystem that adds
 //! configurable delays to simulate slow I/O operations. This is useful for
 //! testing editor responsiveness and performance with slow filesystems (network
 //! drives, slow disks, etc.).
 
-use super::backend::{FsBackend, FsEntry, FsMetadata};
-use async_trait::async_trait;
+use crate::model::filesystem::{
+    DirEntry, FileMetadata, FilePermissions, FileReader, FileSystem, FileWriter,
+};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 
 /// Configuration for slow filesystem simulation
 #[derive(Debug, Clone)]
 pub struct SlowFsConfig {
     /// Delay for read_dir operations
     pub read_dir_delay: Duration,
-    /// Delay for get_metadata_batch operations (per item)
+    /// Delay for metadata operations
     pub metadata_delay: Duration,
-    /// Delay for exists operations
-    pub exists_delay: Duration,
-    /// Delay for is_dir operations
-    pub is_dir_delay: Duration,
-    /// Delay for get_entry operations
-    pub get_entry_delay: Duration,
-    /// Delay for canonicalize operations
-    pub canonicalize_delay: Duration,
+    /// Delay for read_file operations
+    pub read_file_delay: Duration,
+    /// Delay for write_file operations
+    pub write_file_delay: Duration,
+    /// Delay for other operations (exists, is_dir, etc.)
+    pub other_delay: Duration,
 }
 
 impl SlowFsConfig {
@@ -36,10 +35,9 @@ impl SlowFsConfig {
         Self {
             read_dir_delay: delay,
             metadata_delay: delay,
-            exists_delay: delay,
-            is_dir_delay: delay,
-            get_entry_delay: delay,
-            canonicalize_delay: delay,
+            read_file_delay: delay,
+            write_file_delay: delay,
+            other_delay: delay,
         }
     }
 
@@ -53,10 +51,9 @@ impl SlowFsConfig {
         Self {
             read_dir_delay: Duration::from_millis(500),
             metadata_delay: Duration::from_millis(50),
-            exists_delay: Duration::from_millis(30),
-            is_dir_delay: Duration::from_millis(30),
-            get_entry_delay: Duration::from_millis(100),
-            canonicalize_delay: Duration::from_millis(50),
+            read_file_delay: Duration::from_millis(200),
+            write_file_delay: Duration::from_millis(300),
+            other_delay: Duration::from_millis(30),
         }
     }
 
@@ -65,10 +62,9 @@ impl SlowFsConfig {
         Self {
             read_dir_delay: Duration::from_millis(200),
             metadata_delay: Duration::from_millis(20),
-            exists_delay: Duration::from_millis(10),
-            is_dir_delay: Duration::from_millis(10),
-            get_entry_delay: Duration::from_millis(50),
-            canonicalize_delay: Duration::from_millis(20),
+            read_file_delay: Duration::from_millis(100),
+            write_file_delay: Duration::from_millis(150),
+            other_delay: Duration::from_millis(10),
         }
     }
 }
@@ -80,24 +76,18 @@ impl Default for SlowFsConfig {
 }
 
 /// Metrics tracking for filesystem operations
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct BackendMetrics {
     /// Number of read_dir calls
-    pub read_dir_calls: usize,
-    /// Number of get_metadata_batch calls
-    pub metadata_batch_calls: usize,
-    /// Number of individual metadata items fetched
-    pub metadata_items: usize,
-    /// Number of exists calls
-    pub exists_calls: usize,
-    /// Number of is_dir calls
-    pub is_dir_calls: usize,
-    /// Number of get_entry calls
-    pub get_entry_calls: usize,
-    /// Number of canonicalize calls
-    pub canonicalize_calls: usize,
-    /// Total time spent in artificial delays
-    pub total_delay_time: Duration,
+    pub read_dir_calls: AtomicUsize,
+    /// Number of metadata calls
+    pub metadata_calls: AtomicUsize,
+    /// Number of read_file calls
+    pub read_file_calls: AtomicUsize,
+    /// Number of write_file calls
+    pub write_file_calls: AtomicUsize,
+    /// Number of other calls
+    pub other_calls: AtomicUsize,
 }
 
 impl BackendMetrics {
@@ -107,137 +97,220 @@ impl BackendMetrics {
     }
 
     /// Reset all metrics to zero
-    pub fn reset(&mut self) {
-        *self = Self::default();
+    pub fn reset(&self) {
+        self.read_dir_calls.store(0, Ordering::SeqCst);
+        self.metadata_calls.store(0, Ordering::SeqCst);
+        self.read_file_calls.store(0, Ordering::SeqCst);
+        self.write_file_calls.store(0, Ordering::SeqCst);
+        self.other_calls.store(0, Ordering::SeqCst);
     }
 
     /// Get total number of filesystem calls
     pub fn total_calls(&self) -> usize {
-        self.read_dir_calls
-            + self.metadata_batch_calls
-            + self.exists_calls
-            + self.is_dir_calls
-            + self.get_entry_calls
-            + self.canonicalize_calls
+        self.read_dir_calls.load(Ordering::SeqCst)
+            + self.metadata_calls.load(Ordering::SeqCst)
+            + self.read_file_calls.load(Ordering::SeqCst)
+            + self.write_file_calls.load(Ordering::SeqCst)
+            + self.other_calls.load(Ordering::SeqCst)
     }
 }
 
-/// Slow filesystem backend wrapper for testing
+/// Slow filesystem wrapper for testing
 ///
-/// Wraps any FsBackend implementation and adds configurable delays to each
-/// operation. Also tracks metrics about operation counts and timing.
-pub struct SlowFsBackend {
-    /// The underlying real backend
-    inner: Arc<dyn FsBackend>,
+/// Wraps any FileSystem implementation and adds configurable delays to each
+/// operation. Also tracks metrics about operation counts.
+pub struct SlowFileSystem {
+    /// The underlying real filesystem
+    inner: Arc<dyn FileSystem>,
     /// Configuration for delays
     config: SlowFsConfig,
     /// Metrics tracking
-    metrics: Arc<Mutex<BackendMetrics>>,
+    metrics: Arc<BackendMetrics>,
 }
 
-impl SlowFsBackend {
-    /// Create a new slow filesystem backend
-    pub fn new(inner: Arc<dyn FsBackend>, config: SlowFsConfig) -> Self {
+impl SlowFileSystem {
+    /// Create a new slow filesystem wrapper
+    pub fn new(inner: Arc<dyn FileSystem>, config: SlowFsConfig) -> Self {
         Self {
             inner,
             config,
-            metrics: Arc::new(Mutex::new(BackendMetrics::new())),
+            metrics: Arc::new(BackendMetrics::new()),
         }
     }
 
     /// Create with uniform delay for all operations
-    pub fn with_uniform_delay(inner: Arc<dyn FsBackend>, delay: Duration) -> Self {
+    pub fn with_uniform_delay(inner: Arc<dyn FileSystem>, delay: Duration) -> Self {
         Self::new(inner, SlowFsConfig::uniform(delay))
     }
 
-    /// Get a snapshot of current metrics
-    pub async fn metrics(&self) -> BackendMetrics {
-        self.metrics.lock().await.clone()
+    /// Get a reference to the metrics
+    pub fn metrics(&self) -> &Arc<BackendMetrics> {
+        &self.metrics
     }
 
     /// Reset metrics to zero
-    pub async fn reset_metrics(&self) {
-        self.metrics.lock().await.reset();
+    pub fn reset_metrics(&self) {
+        self.metrics.reset();
     }
 
-    /// Get a clone of the metrics Arc for sharing
-    pub fn metrics_arc(&self) -> Arc<Mutex<BackendMetrics>> {
-        Arc::clone(&self.metrics)
-    }
-
-    /// Add delay and update metrics
-    async fn add_delay(&self, delay: Duration) {
+    /// Add delay
+    fn add_delay(&self, delay: Duration) {
         if !delay.is_zero() {
-            tokio::time::sleep(delay).await;
-            self.metrics.lock().await.total_delay_time += delay;
+            std::thread::sleep(delay);
         }
     }
 }
 
-#[async_trait]
-impl FsBackend for SlowFsBackend {
-    async fn read_dir(&self, path: &Path) -> io::Result<Vec<FsEntry>> {
-        self.add_delay(self.config.read_dir_delay).await;
-        self.metrics.lock().await.read_dir_calls += 1;
-        self.inner.read_dir(path).await
+impl FileSystem for SlowFileSystem {
+    fn read_file(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.add_delay(self.config.read_file_delay);
+        self.metrics.read_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.read_file(path)
     }
 
-    async fn get_metadata_batch(&self, paths: &[PathBuf]) -> Vec<io::Result<FsMetadata>> {
-        // Add delay per item to simulate slow stat operations
-        let total_delay = self.config.metadata_delay * paths.len() as u32;
-        self.add_delay(total_delay).await;
-
-        let mut metrics = self.metrics.lock().await;
-        metrics.metadata_batch_calls += 1;
-        metrics.metadata_items += paths.len();
-        drop(metrics);
-
-        self.inner.get_metadata_batch(paths).await
+    fn read_range(&self, path: &Path, offset: u64, len: usize) -> io::Result<Vec<u8>> {
+        self.add_delay(self.config.read_file_delay);
+        self.metrics.read_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.read_range(path, offset, len)
     }
 
-    async fn exists(&self, path: &Path) -> bool {
-        self.add_delay(self.config.exists_delay).await;
-        self.metrics.lock().await.exists_calls += 1;
-        self.inner.exists(path).await
+    fn write_file(&self, path: &Path, data: &[u8]) -> io::Result<()> {
+        self.add_delay(self.config.write_file_delay);
+        self.metrics.write_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.write_file(path, data)
     }
 
-    async fn is_dir(&self, path: &Path) -> io::Result<bool> {
-        self.add_delay(self.config.is_dir_delay).await;
-        self.metrics.lock().await.is_dir_calls += 1;
-        self.inner.is_dir(path).await
+    fn create_file(&self, path: &Path) -> io::Result<Box<dyn FileWriter>> {
+        self.add_delay(self.config.write_file_delay);
+        self.metrics.write_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.create_file(path)
     }
 
-    async fn get_entry(&self, path: &Path) -> io::Result<FsEntry> {
-        self.add_delay(self.config.get_entry_delay).await;
-        self.metrics.lock().await.get_entry_calls += 1;
-        self.inner.get_entry(path).await
+    fn open_file(&self, path: &Path) -> io::Result<Box<dyn FileReader>> {
+        self.add_delay(self.config.read_file_delay);
+        self.metrics.read_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.open_file(path)
     }
 
-    async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        self.add_delay(self.config.canonicalize_delay).await;
-        self.metrics.lock().await.canonicalize_calls += 1;
-        self.inner.canonicalize(path).await
+    fn open_file_for_write(&self, path: &Path) -> io::Result<Box<dyn FileWriter>> {
+        self.add_delay(self.config.write_file_delay);
+        self.metrics.write_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.open_file_for_write(path)
+    }
+
+    fn open_file_for_append(&self, path: &Path) -> io::Result<Box<dyn FileWriter>> {
+        self.add_delay(self.config.write_file_delay);
+        self.metrics.write_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.open_file_for_append(path)
+    }
+
+    fn set_file_length(&self, path: &Path, len: u64) -> io::Result<()> {
+        self.add_delay(self.config.write_file_delay);
+        self.metrics.write_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.set_file_length(path, len)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.add_delay(self.config.other_delay);
+        self.metrics.other_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.rename(from, to)
+    }
+
+    fn copy(&self, from: &Path, to: &Path) -> io::Result<u64> {
+        self.add_delay(self.config.write_file_delay);
+        self.metrics.write_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.copy(from, to)
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        self.add_delay(self.config.other_delay);
+        self.metrics.other_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.remove_file(path)
+    }
+
+    fn remove_dir(&self, path: &Path) -> io::Result<()> {
+        self.add_delay(self.config.other_delay);
+        self.metrics.other_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.remove_dir(path)
+    }
+
+    fn metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        self.add_delay(self.config.metadata_delay);
+        self.metrics.metadata_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.metadata(path)
+    }
+
+    fn symlink_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        self.add_delay(self.config.metadata_delay);
+        self.metrics.metadata_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.symlink_metadata(path)
+    }
+
+    fn is_dir(&self, path: &Path) -> io::Result<bool> {
+        self.add_delay(self.config.other_delay);
+        self.metrics.other_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.is_dir(path)
+    }
+
+    fn is_file(&self, path: &Path) -> io::Result<bool> {
+        self.add_delay(self.config.other_delay);
+        self.metrics.other_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.is_file(path)
+    }
+
+    fn set_permissions(&self, path: &Path, permissions: &FilePermissions) -> io::Result<()> {
+        self.add_delay(self.config.other_delay);
+        self.metrics.other_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.set_permissions(path, permissions)
+    }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
+        self.add_delay(self.config.read_dir_delay);
+        self.metrics.read_dir_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.read_dir(path)
+    }
+
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        self.add_delay(self.config.other_delay);
+        self.metrics.other_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.create_dir(path)
+    }
+
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        self.add_delay(self.config.other_delay);
+        self.metrics.other_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.create_dir_all(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        self.add_delay(self.config.other_delay);
+        self.metrics.other_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.canonicalize(path)
+    }
+
+    fn current_uid(&self) -> u32 {
+        self.inner.current_uid()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::fs::LocalFsBackend;
+    use crate::model::filesystem::StdFileSystem;
     use std::time::Instant;
     use tempfile::TempDir;
 
-    #[tokio::test]
-    async fn test_slow_backend_adds_delay() {
+    #[test]
+    fn test_slow_fs_adds_delay() {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        let local = Arc::new(LocalFsBackend::new());
+        let inner = Arc::new(StdFileSystem);
         let slow_config = SlowFsConfig::uniform(Duration::from_millis(100));
-        let slow = SlowFsBackend::new(local, slow_config);
+        let slow = SlowFileSystem::new(inner, slow_config);
 
         let start = Instant::now();
-        let _ = slow.read_dir(temp_path).await;
+        let _ = slow.read_dir(temp_path);
         let elapsed = start.elapsed();
 
         // Should take at least 100ms due to artificial delay
@@ -248,92 +321,53 @@ mod tests {
         );
 
         // Check metrics
-        let metrics = slow.metrics().await;
-        assert_eq!(metrics.read_dir_calls, 1);
-        assert!(metrics.total_delay_time >= Duration::from_millis(100));
+        assert_eq!(slow.metrics().read_dir_calls.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test]
-    async fn test_metrics_tracking() {
+    #[test]
+    fn test_metrics_tracking() {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        let local = Arc::new(LocalFsBackend::new());
-        let slow = SlowFsBackend::new(local, SlowFsConfig::none());
+        let inner = Arc::new(StdFileSystem);
+        let slow = SlowFileSystem::new(inner, SlowFsConfig::none());
 
         // Perform various operations
-        let _ = slow.read_dir(temp_path).await;
-        let _ = slow.exists(temp_path).await;
-        let _ = slow.is_dir(temp_path).await;
+        let _ = slow.read_dir(temp_path);
+        let _ = slow.metadata(temp_path);
+        let _ = slow.is_dir(temp_path);
 
-        let metrics = slow.metrics().await;
-        assert_eq!(metrics.read_dir_calls, 1);
-        assert_eq!(metrics.exists_calls, 1);
-        assert_eq!(metrics.is_dir_calls, 1);
-        assert_eq!(metrics.total_calls(), 3);
+        assert_eq!(slow.metrics().read_dir_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(slow.metrics().metadata_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(slow.metrics().other_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(slow.metrics().total_calls(), 3);
     }
 
-    #[tokio::test]
-    async fn test_metadata_batch_delay() {
+    #[test]
+    fn test_reset_metrics() {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        // Create test files
-        std::fs::write(temp_path.join("file1.txt"), "test").unwrap();
-        std::fs::write(temp_path.join("file2.txt"), "test").unwrap();
-
-        let local = Arc::new(LocalFsBackend::new());
-        let slow_config = SlowFsConfig {
-            metadata_delay: Duration::from_millis(50),
-            ..SlowFsConfig::none()
-        };
-        let slow = SlowFsBackend::new(local, slow_config);
-
-        let paths = vec![temp_path.join("file1.txt"), temp_path.join("file2.txt")];
-
-        let start = Instant::now();
-        let _ = slow.get_metadata_batch(&paths).await;
-        let elapsed = start.elapsed();
-
-        // Should take at least 100ms (50ms * 2 files)
-        assert!(
-            elapsed >= Duration::from_millis(100),
-            "Expected at least 100ms delay, got {:?}",
-            elapsed
-        );
-
-        let metrics = slow.metrics().await;
-        assert_eq!(metrics.metadata_batch_calls, 1);
-        assert_eq!(metrics.metadata_items, 2);
-    }
-
-    #[tokio::test]
-    async fn test_reset_metrics() {
-        let temp_dir = TempDir::new().unwrap();
-        let temp_path = temp_dir.path();
-
-        let local = Arc::new(LocalFsBackend::new());
-        let slow = SlowFsBackend::new(local, SlowFsConfig::none());
+        let inner = Arc::new(StdFileSystem);
+        let slow = SlowFileSystem::new(inner, SlowFsConfig::none());
 
         // Perform some operations
-        let _ = slow.read_dir(temp_path).await;
-        let _ = slow.exists(temp_path).await;
+        let _ = slow.read_dir(temp_path);
+        let _ = slow.metadata(temp_path);
 
         // Verify metrics are non-zero
-        let metrics_before = slow.metrics().await;
-        assert!(metrics_before.total_calls() > 0);
+        assert!(slow.metrics().total_calls() > 0);
 
         // Reset
-        slow.reset_metrics().await;
+        slow.reset_metrics();
 
         // Verify metrics are zero
-        let metrics_after = slow.metrics().await;
-        assert_eq!(metrics_after.total_calls(), 0);
+        assert_eq!(slow.metrics().total_calls(), 0);
     }
 
-    #[tokio::test]
-    async fn test_preset_configs() {
-        let local = Arc::new(LocalFsBackend::new());
+    #[test]
+    fn test_preset_configs() {
+        let inner = Arc::new(StdFileSystem);
 
         // Test slow_network preset
         let network_config = SlowFsConfig::slow_network();
@@ -348,8 +382,8 @@ mod tests {
         assert_eq!(none_config.read_dir_delay, Duration::ZERO);
 
         // Ensure they can all be constructed
-        let _slow_network = SlowFsBackend::new(local.clone(), network_config);
-        let _slow_disk = SlowFsBackend::new(local.clone(), disk_config);
-        let _no_delay = SlowFsBackend::new(local, none_config);
+        let _slow_network = SlowFileSystem::new(inner.clone(), network_config);
+        let _slow_disk = SlowFileSystem::new(inner.clone(), disk_config);
+        let _no_delay = SlowFileSystem::new(inner, none_config);
     }
 }

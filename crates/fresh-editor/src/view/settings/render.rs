@@ -148,25 +148,24 @@ pub fn render_settings(
     // Narrow mode when inner width < 60 columns
     let narrow_mode = inner_area.width < 60;
 
-    // Always render search bar at the top (1 line when inactive, 2 when active with results)
+    // Always render search bar at the top (1 line height to avoid layout jump)
     let search_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
-    let search_header_height = if state.search_active {
-        render_search_header(
-            frame,
-            Rect::new(inner_area.x, inner_area.y, inner_area.width, 2),
-            state,
-            theme,
-        );
-        2
+    let search_header_height = 1;
+    if state.search_active {
+        render_search_header(frame, search_area, state, theme);
     } else {
         render_search_hint(frame, search_area, theme);
-        1
-    };
+    }
+
+    // Footer height: 2 lines for horizontal (separator + buttons), 7 for vertical
+    let footer_height = if narrow_mode { 7 } else { 2 };
     let content_area = Rect::new(
         inner_area.x,
         inner_area.y + search_header_height,
         inner_area.width,
-        inner_area.height.saturating_sub(search_header_height),
+        inner_area
+            .height
+            .saturating_sub(search_header_height + footer_height),
     );
 
     // Create layout tracker
@@ -221,7 +220,7 @@ fn render_horizontal_layout(
 ) {
     // Layout: [left panel (categories)] | [right panel (settings)]
     let chunks =
-        Layout::horizontal([Constraint::Length(25), Constraint::Min(40)]).split(content_area);
+        Layout::horizontal([Constraint::Length(20), Constraint::Min(40)]).split(content_area);
 
     let categories_area = chunks[0];
     let settings_area = chunks[1];
@@ -540,7 +539,7 @@ fn render_settings_panel(
     let items_start_y = y;
 
     // Calculate available height for items
-    let available_height = area.height.saturating_sub(header_height as u16 + 1);
+    let available_height = area.height.saturating_sub(header_height as u16);
 
     // Update scroll panel with current viewport and content
     let page = state.pages.get(state.selected_category).unwrap();
@@ -675,6 +674,66 @@ fn render_setting_item_pure(
     theme: &Theme,
     label_width: Option<u16>,
 ) -> ControlLayoutInfo {
+    use super::items::SECTION_HEADER_HEIGHT;
+
+    // Handle section header if this item starts a new section
+    let (item_area, item_skip_top) = if item.is_section_start {
+        if let Some(ref section_name) = item.section {
+            // Calculate how much of the section header is visible
+            let header_visible_start = skip_top.min(SECTION_HEADER_HEIGHT);
+            let header_visible_height = SECTION_HEADER_HEIGHT.saturating_sub(skip_top);
+
+            // Render visible part of section header
+            if header_visible_height > 0 && area.height > 0 {
+                let header_y = area.y;
+                let _header_area_height = header_visible_height.min(area.height);
+
+                // First row: section title (bold, slightly dimmed)
+                if header_visible_start == 0 {
+                    let header_style = Style::default()
+                        .fg(theme.menu_active_fg)
+                        .add_modifier(Modifier::BOLD);
+                    // Render section name with underline characters
+                    let header_text = format!("── {} ", section_name);
+                    // Fill remaining width with underline
+                    let remaining = area.width.saturating_sub(header_text.len() as u16);
+                    let full_header = format!("{}{}", header_text, "─".repeat(remaining as usize));
+                    frame.render_widget(
+                        Paragraph::new(full_header).style(header_style),
+                        Rect::new(area.x, header_y, area.width, 1),
+                    );
+                }
+
+                // Second row is a blank spacer (already blank, no rendering needed)
+            }
+
+            // Adjust area for the item content (after header)
+            let item_y_offset = header_visible_height.min(area.height);
+            let item_area = Rect::new(
+                area.x,
+                area.y + item_y_offset,
+                area.width,
+                area.height.saturating_sub(item_y_offset),
+            );
+            // Skip top for the item content is reduced by the header height
+            let item_skip_top = skip_top.saturating_sub(SECTION_HEADER_HEIGHT);
+            (item_area, item_skip_top)
+        } else {
+            (area, skip_top)
+        }
+    } else {
+        (area, skip_top)
+    };
+
+    // If no space left for item content, return empty layout
+    if item_area.height == 0 {
+        return ControlLayoutInfo::default();
+    }
+
+    // Use adjusted area and skip_top for the rest of rendering
+    let area = item_area;
+    let skip_top = item_skip_top;
+
     let is_selected = ctx.settings_focused && idx == ctx.selected_item;
 
     // Check if this item or any of its controls is being hovered
@@ -707,8 +766,9 @@ fn render_setting_item_pure(
 
     // Draw selection or hover highlight background (only for content rows, not spacing)
     if is_focused_or_hovered {
+        // Use dedicated settings colors for selected items
         let bg_style = if is_selected {
-            Style::default().bg(theme.current_line_bg)
+            Style::default().bg(theme.settings_selected_bg)
         } else {
             Style::default().bg(theme.menu_hover_bg)
         };
@@ -721,7 +781,7 @@ fn render_setting_item_pure(
     // Render focus indicator ">" at position 0 for selected items
     if is_selected && skip_top == 0 {
         let indicator_style = Style::default()
-            .fg(theme.menu_highlight_fg)
+            .fg(theme.settings_selected_fg)
             .add_modifier(Modifier::BOLD);
         frame.render_widget(
             Paragraph::new(">").style(indicator_style),
@@ -731,7 +791,7 @@ fn render_setting_item_pure(
 
     // Render modified indicator "●" at position 1 for items defined in the target layer
     if item.modified && skip_top == 0 {
-        let modified_style = Style::default().fg(theme.menu_highlight_fg);
+        let modified_style = Style::default().fg(theme.settings_selected_fg);
         frame.render_widget(
             Paragraph::new("●").style(modified_style),
             Rect::new(area.x + 1, area.y, 1, 1),
@@ -877,11 +937,19 @@ fn render_control(
 
         SettingControl::Dropdown(state) => {
             if skip_rows > 0 {
-                return ControlLayoutInfo::Dropdown(Rect::default());
+                return ControlLayoutInfo::Dropdown {
+                    button_area: Rect::default(),
+                    option_areas: Vec::new(),
+                    scroll_offset: 0,
+                };
             }
             let colors = DropdownColors::from_theme(theme);
             let drop_layout = render_dropdown_aligned(frame, area, state, &colors, label_width);
-            ControlLayoutInfo::Dropdown(drop_layout.button_area)
+            ControlLayoutInfo::Dropdown {
+                button_area: drop_layout.button_area,
+                option_areas: drop_layout.option_areas,
+                scroll_offset: drop_layout.scroll_offset,
+            }
         }
 
         SettingControl::Text(state) => {
@@ -932,6 +1000,7 @@ fn render_control(
             let map_layout = render_map_partial(frame, area, state, &colors, 20, skip_rows);
             ControlLayoutInfo::Map {
                 entry_rows: map_layout.entry_areas.iter().map(|e| e.row_area).collect(),
+                add_row_area: map_layout.add_row_area,
             }
         }
 
@@ -940,7 +1009,9 @@ fn render_control(
                 label_fg: theme.editor_fg,
                 key_fg: theme.help_key_fg,
                 action_fg: theme.syntax_function,
-                focused_bg: theme.selection_bg,
+                // Use settings colors for focused items in settings UI
+                focused_bg: theme.settings_selected_bg,
+                focused_fg: theme.settings_selected_fg,
                 delete_fg: theme.diagnostic_error_fg,
                 add_fg: theme.syntax_string,
             };
@@ -1157,9 +1228,10 @@ fn render_text_list_partial(
         return empty_layout;
     }
 
+    // Use focused_fg for label when focused (not focused, which is the bg color)
     let label_color = match state.focus {
-        FocusState::Focused => colors.focused,
-        FocusState::Hovered => colors.focused,
+        FocusState::Focused => colors.focused_fg,
+        FocusState::Hovered => colors.focused_fg,
         FocusState::Disabled => colors.disabled,
         FocusState::Normal => colors.label,
     };
@@ -1320,9 +1392,10 @@ fn render_map_partial(
         return empty_layout;
     }
 
+    // Use focused_fg for label when focused (not focused, which is the bg color)
     let label_color = match state.focus {
-        FocusState::Focused => colors.focused,
-        FocusState::Hovered => colors.focused,
+        FocusState::Focused => colors.focused_fg,
+        FocusState::Hovered => colors.focused_fg,
         FocusState::Disabled => colors.disabled,
         FocusState::Normal => colors.label,
     };
@@ -1412,7 +1485,8 @@ fn render_map_partial(
         }
 
         let (key_color, value_color) = if is_focused {
-            (colors.label, colors.value_preview)
+            // Use focused_fg for text on the focused background
+            (colors.focused_fg, colors.focused_fg)
         } else if state.focus == FocusState::Disabled {
             (colors.disabled, colors.disabled)
         } else {
@@ -1449,9 +1523,7 @@ fn render_map_partial(
         if is_focused {
             spans.push(Span::styled(
                 "  [Enter to edit]",
-                base_style
-                    .fg(colors.value_preview)
-                    .add_modifier(Modifier::DIM),
+                base_style.fg(colors.focused_fg).add_modifier(Modifier::DIM),
             ));
         }
 
@@ -1498,9 +1570,7 @@ fn render_map_partial(
         if is_focused {
             spans.push(Span::styled(
                 "  [Enter to add]",
-                base_style
-                    .fg(colors.value_preview)
-                    .add_modifier(Modifier::DIM),
+                base_style.fg(colors.focused_fg).add_modifier(Modifier::DIM),
             ));
         }
 
@@ -1591,15 +1661,33 @@ fn render_keybinding_list_partial(
                 .unwrap_or("(no action)");
 
             let indicator = if is_entry_focused { "> " } else { "  " };
+            // Use focused_fg for all text when entry is focused for good contrast
+            let (indicator_fg, key_fg, arrow_fg, action_fg, delete_fg) = if is_entry_focused {
+                (
+                    colors.focused_fg,
+                    colors.focused_fg,
+                    colors.focused_fg,
+                    colors.focused_fg,
+                    colors.focused_fg,
+                )
+            } else {
+                (
+                    colors.label_fg,
+                    colors.key_fg,
+                    colors.label_fg,
+                    colors.action_fg,
+                    colors.delete_fg,
+                )
+            };
             let line = Line::from(vec![
-                Span::styled(indicator, Style::default().fg(colors.label_fg).bg(bg)),
+                Span::styled(indicator, Style::default().fg(indicator_fg).bg(bg)),
                 Span::styled(
                     format!("{:<20}", key_combo),
-                    Style::default().fg(colors.key_fg).bg(bg),
+                    Style::default().fg(key_fg).bg(bg),
                 ),
-                Span::styled(" → ", Style::default().fg(colors.label_fg).bg(bg)),
-                Span::styled(action, Style::default().fg(colors.action_fg).bg(bg)),
-                Span::styled(" [x]", Style::default().fg(colors.delete_fg).bg(bg)),
+                Span::styled(" → ", Style::default().fg(arrow_fg).bg(bg)),
+                Span::styled(action, Style::default().fg(action_fg).bg(bg)),
+                Span::styled(" [x]", Style::default().fg(delete_fg).bg(bg)),
             ]);
             frame.render_widget(Paragraph::new(line), entry_area);
 
@@ -1622,9 +1710,15 @@ fn render_keybinding_list_partial(
         };
 
         let indicator = if is_add_focused { "> " } else { "  " };
+        // Use focused_fg for text when add row is focused
+        let (indicator_fg, add_fg) = if is_add_focused {
+            (colors.focused_fg, colors.focused_fg)
+        } else {
+            (colors.label_fg, colors.add_fg)
+        };
         let line = Line::from(vec![
-            Span::styled(indicator, Style::default().fg(colors.label_fg).bg(bg)),
-            Span::styled("[+] Add new", Style::default().fg(colors.add_fg).bg(bg)),
+            Span::styled(indicator, Style::default().fg(indicator_fg).bg(bg)),
+            Span::styled("[+] Add new", Style::default().fg(add_fg).bg(bg)),
         ]);
         let add_area = Rect::new(area.x + indent, y, area.width.saturating_sub(indent), 1);
         frame.render_widget(Paragraph::new(line), add_area);
@@ -1641,7 +1735,7 @@ fn render_keybinding_list_partial(
 }
 
 /// Layout info for a control (for hit testing)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum ControlLayoutInfo {
     Toggle(Rect),
     Number {
@@ -1649,13 +1743,18 @@ pub enum ControlLayoutInfo {
         increment: Rect,
         value: Rect,
     },
-    Dropdown(Rect),
+    Dropdown {
+        button_area: Rect,
+        option_areas: Vec<Rect>,
+        scroll_offset: usize,
+    },
     Text(Rect),
     TextList {
         rows: Vec<Rect>,
     },
     Map {
         entry_rows: Vec<Rect>,
+        add_row_area: Option<Rect>,
     },
     ObjectArray {
         entry_rows: Vec<Rect>,
@@ -1663,6 +1762,7 @@ pub enum ControlLayoutInfo {
     Json {
         edit_area: Rect,
     },
+    #[default]
     Complex,
 }
 
@@ -2106,53 +2206,43 @@ fn render_footer_vertical(
 
 /// Render the search header with query input
 fn render_search_header(frame: &mut Frame, area: Rect, state: &SettingsState, theme: &Theme) {
-    // First line: Search input
-    let search_style = Style::default().fg(theme.popup_text_fg);
+    let search_style = Style::default().fg(theme.settings_selected_fg);
     let cursor_style = Style::default()
-        .fg(theme.menu_highlight_fg)
-        .add_modifier(Modifier::UNDERLINED);
+        .fg(theme.settings_selected_fg)
+        .add_modifier(Modifier::REVERSED);
+
+    // Show result count inline after cursor
+    let result_count = state.search_results.len();
+    let count_text = if state.search_query.is_empty() {
+        String::new()
+    } else if result_count == 0 {
+        " (no results)".to_string()
+    } else if result_count == 1 {
+        " (1 result)".to_string()
+    } else {
+        format!(" ({} results)", result_count)
+    };
+    let count_style = Style::default().fg(theme.line_number_fg);
 
     let spans = vec![
-        Span::styled("🔍 ", search_style),
+        Span::styled("> ", search_style),
         Span::styled(&state.search_query, search_style),
-        Span::styled("█", cursor_style), // Cursor
+        Span::styled(" ", cursor_style), // Cursor
+        Span::styled(count_text, count_style),
     ];
     let line = Line::from(spans);
-    frame.render_widget(
-        Paragraph::new(line),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
-
-    // Second line: Result count
-    let result_count = state.search_results.len();
-    let count_text = if result_count == 0 {
-        if state.search_query.is_empty() {
-            String::new()
-        } else {
-            "No results found".to_string()
-        }
-    } else if result_count == 1 {
-        "1 result".to_string()
-    } else {
-        format!("{} results", result_count)
-    };
-
-    let count_style = Style::default().fg(theme.line_number_fg);
-    frame.render_widget(
-        Paragraph::new(count_text).style(count_style),
-        Rect::new(area.x, area.y + 1, area.width, 1),
-    );
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// Render search hint when search is not active
 fn render_search_hint(frame: &mut Frame, area: Rect, theme: &Theme) {
     let hint_style = Style::default().fg(theme.line_number_fg);
     let key_style = Style::default()
-        .fg(theme.menu_highlight_fg)
+        .fg(theme.menu_active_fg)
         .add_modifier(Modifier::BOLD);
 
     let spans = vec![
-        Span::styled("🔍 ", hint_style),
+        Span::styled("Press ", hint_style),
         Span::styled("/", key_style),
         Span::styled(" to search settings...", hint_style),
     ];
@@ -2194,7 +2284,8 @@ fn render_search_result_item(
 ) {
     // Draw selection highlight background
     if is_selected {
-        let bg_style = Style::default().bg(theme.current_line_bg);
+        // Use dedicated settings colors for selected items
+        let bg_style = Style::default().bg(theme.settings_selected_bg);
         for row in 0..area.height.min(3) {
             let row_area = Rect::new(area.x, area.y + row, area.width, 1);
             frame.render_widget(Paragraph::new("").style(bg_style), row_area);
@@ -2203,7 +2294,7 @@ fn render_search_result_item(
 
     // First line: Setting name with highlighting
     let name_style = if is_selected {
-        Style::default().fg(theme.menu_highlight_fg)
+        Style::default().fg(theme.settings_selected_fg)
     } else {
         Style::default().fg(theme.popup_text_fg)
     };
@@ -2389,6 +2480,7 @@ fn render_confirm_dialog(
 
     for (idx, label) in options.iter().enumerate() {
         let is_selected = idx == state.confirm_dialog_selection;
+        let is_hovered = state.confirm_dialog_hover == Some(idx);
         let button_width = label.len() as u16 + 4;
 
         let style = if is_selected {
@@ -2396,6 +2488,10 @@ fn render_confirm_dialog(
                 .fg(theme.menu_highlight_fg)
                 .bg(theme.menu_highlight_bg)
                 .add_modifier(ratatui::style::Modifier::BOLD)
+        } else if is_hovered {
+            Style::default()
+                .fg(theme.menu_hover_fg)
+                .bg(theme.menu_hover_bg)
         } else {
             Style::default().fg(theme.popup_text_fg)
         };
@@ -2414,7 +2510,7 @@ fn render_confirm_dialog(
     }
 
     // Help text
-    let help = "←/→: Select   Enter: Confirm   Esc: Cancel";
+    let help = "←/→/Tab: Select   Enter: Confirm   Esc: Cancel";
     let help_style = Style::default().fg(theme.line_number_fg);
     frame.render_widget(
         Paragraph::new(help).style(help_style),
@@ -2563,8 +2659,9 @@ fn render_entry_dialog(
 
         // Draw selection or hover highlight background (only for editable items)
         if is_focused || is_hovered {
+            // Use dedicated settings colors for focused items
             let bg_style = if is_focused {
-                Style::default().bg(theme.current_line_bg)
+                Style::default().bg(theme.settings_selected_bg)
             } else {
                 Style::default().bg(theme.menu_hover_bg)
             };
@@ -2581,7 +2678,7 @@ fn render_entry_dialog(
         // Render focus indicator ">" at position 0 for the focused item
         if is_focused && skip_rows == 0 {
             let indicator_style = Style::default()
-                .fg(theme.menu_highlight_fg)
+                .fg(theme.settings_selected_fg)
                 .add_modifier(Modifier::BOLD);
             frame.render_widget(
                 Paragraph::new(">").style(indicator_style),
@@ -2591,7 +2688,7 @@ fn render_entry_dialog(
 
         // Render modified indicator "●" at position 1 for modified items
         if item.modified && skip_rows == 0 {
-            let modified_style = Style::default().fg(theme.menu_highlight_fg);
+            let modified_style = Style::default().fg(theme.settings_selected_fg);
             frame.render_widget(
                 Paragraph::new("●").style(modified_style),
                 Rect::new(inner.x + 1, screen_y, 1, 1),

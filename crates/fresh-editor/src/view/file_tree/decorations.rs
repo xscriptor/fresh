@@ -47,13 +47,21 @@ impl FileExplorerDecorationCache {
     }
 
     /// Lookup a decoration for an exact path.
+    /// Also tries the canonicalized path to handle symlinks.
     pub fn direct_for_path(&self, path: &Path) -> Option<&FileExplorerDecoration> {
-        self.direct.get(path)
+        self.direct.get(path).or_else(|| {
+            // Try canonicalized path for symlink support
+            path.canonicalize().ok().and_then(|p| self.direct.get(&p))
+        })
     }
 
     /// Lookup a bubbled decoration for a path (direct or descendant).
+    /// Also tries the canonicalized path to handle symlinks.
     pub fn bubbled_for_path(&self, path: &Path) -> Option<&FileExplorerDecoration> {
-        self.bubbled.get(path)
+        self.bubbled.get(path).or_else(|| {
+            // Try canonicalized path for symlink support
+            path.canonicalize().ok().and_then(|p| self.bubbled.get(&p))
+        })
     }
 }
 

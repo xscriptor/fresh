@@ -11,6 +11,7 @@ use super::*;
 use crate::input::keybindings::Action;
 use crate::model::event::{SplitDirection, SplitId};
 use crate::services::plugins::hooks::HookArgs;
+use crate::view::popup_mouse::{popup_areas_to_layout_info, PopupHitTester};
 use crate::view::prompt::PromptType;
 use anyhow::Result as AnyhowResult;
 use rust_i18n::t;
@@ -138,6 +139,8 @@ impl Editor {
                 // Clear popup scrollbar drag state
                 self.mouse_state.dragging_popup_scrollbar = None;
                 self.mouse_state.drag_start_popup_scroll = None;
+                // Clear popup text selection drag state (selection remains in popup)
+                self.mouse_state.selecting_in_popup = None;
 
                 // If we finished dragging a separator, resize visible terminals
                 if was_dragging_separator {
@@ -184,8 +187,11 @@ impl Editor {
                 self.update_lsp_hover_state(col, row);
             }
             MouseEventKind::ScrollUp => {
-                // Check if file browser is active and should handle scroll
-                if self.is_file_open_active() && self.handle_file_open_scroll(-3) {
+                // Check if prompt with suggestions is active and should handle scroll
+                if self.handle_prompt_scroll(-3) {
+                    needs_render = true;
+                } else if self.is_file_open_active() && self.handle_file_open_scroll(-3) {
+                    // Check if file browser is active and should handle scroll
                     needs_render = true;
                 } else if self.is_mouse_over_any_popup(col, row) {
                     // Scroll the popup content (works for all popups including completion)
@@ -207,8 +213,10 @@ impl Editor {
                 }
             }
             MouseEventKind::ScrollDown => {
-                // Check if file browser is active and should handle scroll
-                if self.is_file_open_active() && self.handle_file_open_scroll(3) {
+                // Check if prompt with suggestions is active and should handle scroll
+                if self.handle_prompt_scroll(3) {
+                    needs_render = true;
+                } else if self.is_file_open_active() && self.handle_file_open_scroll(3) {
                     needs_render = true;
                 } else if self.is_mouse_over_any_popup(col, row) {
                     // Scroll the popup content (works for all popups including completion)
@@ -383,12 +391,31 @@ impl Editor {
         }
 
         // Handle tab context menu hover - update highlighted item
-        if let Some(HoverTarget::TabContextMenuItem(item_idx)) = new_target {
+        if let Some(HoverTarget::TabContextMenuItem(item_idx)) = new_target.clone() {
             if let Some(ref mut menu) = self.tab_context_menu {
                 if menu.highlighted != item_idx {
                     menu.highlighted = item_idx;
                     return true;
                 }
+            }
+        }
+
+        // Handle file explorer status indicator hover - show tooltip
+        // Always dismiss existing tooltip first when target changes
+        if old_target != new_target
+            && matches!(
+                old_target,
+                Some(HoverTarget::FileExplorerStatusIndicator(_))
+            )
+        {
+            self.dismiss_file_explorer_status_tooltip();
+        }
+
+        if let Some(HoverTarget::FileExplorerStatusIndicator(ref path)) = new_target {
+            // Only show tooltip if this is a new hover (not already showing for this path)
+            if old_target != new_target {
+                self.show_file_explorer_status_tooltip(path.clone(), col, row);
+                return true;
             }
         }
 
@@ -549,41 +576,16 @@ impl Editor {
 
     /// Check if mouse position is over a transient popup (hover, signature help)
     fn is_mouse_over_transient_popup(&self, col: u16, row: u16) -> bool {
-        // Check if there's a transient popup showing
-        let has_transient_popup = self
-            .active_state()
-            .popups
-            .top()
-            .is_some_and(|p| p.transient);
-
-        if !has_transient_popup {
-            return false;
-        }
-
-        self.is_mouse_over_any_popup(col, row)
+        let layouts = popup_areas_to_layout_info(&self.cached_layout.popup_areas);
+        let hit_tester = PopupHitTester::new(&layouts, &self.active_state().popups);
+        hit_tester.is_over_transient_popup(col, row)
     }
 
     /// Check if mouse position is over any popup (including non-transient ones like completion)
     fn is_mouse_over_any_popup(&self, col: u16, row: u16) -> bool {
-        // Check if there's any popup showing
-        if !self.active_state().popups.is_visible() {
-            return false;
-        }
-
-        // Check if mouse is over any popup area
-        for (_popup_idx, popup_rect, _inner_rect, _scroll_offset, _num_items, _, _) in
-            self.cached_layout.popup_areas.iter()
-        {
-            if col >= popup_rect.x
-                && col < popup_rect.x + popup_rect.width
-                && row >= popup_rect.y
-                && row < popup_rect.y + popup_rect.height
-            {
-                return true;
-            }
-        }
-
-        false
+        let layouts = popup_areas_to_layout_info(&self.cached_layout.popup_areas);
+        let hit_tester = PopupHitTester::new(&layouts, &self.active_state().popups);
+        hit_tester.is_over_popup(col, row)
     }
 
     /// Compute what hover target is at the given position
@@ -654,8 +656,8 @@ impl Editor {
             }
         }
 
-        // Check menu bar (row 0)
-        if row == 0 {
+        // Check menu bar (row 0, only when visible)
+        if self.menu_bar_visible && row == 0 {
             let all_menus: Vec<crate::config::Menu> = self
                 .menus
                 .menus
@@ -697,6 +699,35 @@ impl Editor {
                 && col < explorer_area.x + explorer_area.width
             {
                 return Some(HoverTarget::FileExplorerCloseButton);
+            }
+
+            // Check if hovering over a status indicator in the file explorer content area
+            // Status indicators are in the rightmost 2 characters of each row (before border)
+            let content_start_y = explorer_area.y + 1; // +1 for title bar
+            let content_end_y = explorer_area.y + explorer_area.height.saturating_sub(1); // -1 for bottom border
+            let status_indicator_x = explorer_area.x + explorer_area.width.saturating_sub(3); // 2 chars + 1 border
+
+            if row >= content_start_y
+                && row < content_end_y
+                && col >= status_indicator_x
+                && col < explorer_area.x + explorer_area.width.saturating_sub(1)
+            {
+                // Determine which item is at this row
+                if let Some(ref explorer) = self.file_explorer {
+                    let relative_row = row.saturating_sub(content_start_y) as usize;
+                    let scroll_offset = explorer.get_scroll_offset();
+                    let item_index = relative_row + scroll_offset;
+                    let display_nodes = explorer.get_display_nodes();
+
+                    if item_index < display_nodes.len() {
+                        let (node_id, _indent) = display_nodes[item_index];
+                        if let Some(node) = explorer.tree().get_node(node_id) {
+                            return Some(HoverTarget::FileExplorerStatusIndicator(
+                                node.entry.path.clone(),
+                            ));
+                        }
+                    }
+                }
             }
 
             // The border is at the right edge of the file explorer area
@@ -784,6 +815,15 @@ impl Editor {
                     }
                 }
 
+                // Check language indicator area
+                if let Some((lang_row, lang_start, lang_end)) =
+                    self.cached_layout.status_bar_language_area
+                {
+                    if row == lang_row && col >= lang_start && col < lang_end {
+                        return Some(HoverTarget::StatusBarLanguageIndicator);
+                    }
+                }
+
                 // Check LSP indicator area
                 if let Some((lsp_row, lsp_start, lsp_end)) = self.cached_layout.status_bar_lsp_area
                 {
@@ -825,6 +865,15 @@ impl Editor {
     /// Double-click in editor area selects the word under the cursor.
     pub(super) fn handle_mouse_double_click(&mut self, col: u16, row: u16) -> AnyhowResult<()> {
         tracing::debug!("handle_mouse_double_click at col={}, row={}", col, row);
+
+        // Handle popups: dismiss if clicking outside, block if clicking inside
+        if self.is_mouse_over_any_popup(col, row) {
+            // Double-click inside popup - block from reaching editor
+            return Ok(());
+        } else {
+            // Double-click outside popup - dismiss transient popups
+            self.dismiss_transient_popups();
+        }
 
         // Is it in the file open dialog?
         if self.handle_file_open_double_click(col, row) {
@@ -935,6 +984,12 @@ impl Editor {
             }
         }
 
+        // Dismiss transient popups (like hover) when clicking outside them
+        // This check must happen before we process the click elsewhere
+        if !self.is_mouse_over_any_popup(col, row) {
+            self.dismiss_transient_popups();
+        }
+
         // Check if click is on suggestions (command palette, autocomplete)
         if let Some((inner_rect, start_idx, _visible_count, total_count)) =
             &self.cached_layout.suggestions_area.clone()
@@ -1020,7 +1075,7 @@ impl Editor {
         }
 
         // Check if click is on a popup content area (they're rendered on top)
-        for (_popup_idx, _popup_rect, inner_rect, scroll_offset, num_items, _, _) in
+        for (popup_idx, _popup_rect, inner_rect, scroll_offset, num_items, _, _) in
             self.cached_layout.popup_areas.iter().rev()
         {
             if col >= inner_rect.x
@@ -1070,7 +1125,37 @@ impl Editor {
                         return self.handle_action(Action::PopupConfirm);
                     }
                 }
+
+                // For text/markdown popups, start text selection
+                let is_text_popup = {
+                    let state = self.active_state();
+                    state.popups.top().is_some_and(|p| {
+                        matches!(
+                            p.content,
+                            crate::view::popup::PopupContent::Text(_)
+                                | crate::view::popup::PopupContent::Markdown(_)
+                        )
+                    })
+                };
+
+                if is_text_popup {
+                    let line = scroll_offset + relative_row;
+                    let popup_idx_copy = *popup_idx; // Copy before mutable borrow
+                    let state = self.active_state_mut();
+                    if let Some(popup) = state.popups.top_mut() {
+                        popup.start_selection(line, relative_col);
+                    }
+                    // Track that we're selecting in a popup
+                    self.mouse_state.selecting_in_popup = Some(popup_idx_copy);
+                    return Ok(());
+                }
             }
+        }
+
+        // If click is inside a popup's outer bounds but wasn't handled above,
+        // block it from reaching the editor (e.g., clicking on popup border)
+        if self.is_mouse_over_any_popup(col, row) {
+            return Ok(());
         }
 
         // Check if click is on the file browser popup
@@ -1078,8 +1163,8 @@ impl Editor {
             return Ok(());
         }
 
-        // Check if click is on menu bar (row 0)
-        if row == 0 {
+        // Check if click is on menu bar (row 0, only when visible)
+        if self.menu_bar_visible && row == 0 {
             let all_menus: Vec<crate::config::Menu> = self
                 .menus
                 .menus
@@ -1185,6 +1270,15 @@ impl Editor {
                 {
                     if row == le_row && col >= le_start && col < le_end {
                         return self.handle_action(Action::SetLineEnding);
+                    }
+                }
+
+                // Check language indicator - click opens language selector
+                if let Some((lang_row, lang_start, lang_end)) =
+                    self.cached_layout.status_bar_language_area
+                {
+                    if row == lang_row && col >= lang_start && col < lang_end {
+                        return self.handle_action(Action::SetLanguage);
                     }
                 }
 
@@ -1415,6 +1509,34 @@ impl Editor {
                     return Ok(());
                 }
             }
+        }
+
+        // If selecting text in popup, extend selection
+        if let Some(popup_idx) = self.mouse_state.selecting_in_popup {
+            // Find the popup area from cached layout
+            if let Some((_, _, inner_rect, scroll_offset, _, _, _)) = self
+                .cached_layout
+                .popup_areas
+                .iter()
+                .find(|(idx, _, _, _, _, _, _)| *idx == popup_idx)
+            {
+                // Check if mouse is within the popup inner area
+                if col >= inner_rect.x
+                    && col < inner_rect.x + inner_rect.width
+                    && row >= inner_rect.y
+                    && row < inner_rect.y + inner_rect.height
+                {
+                    let relative_col = (col - inner_rect.x) as usize;
+                    let relative_row = (row - inner_rect.y) as usize;
+                    let line = scroll_offset + relative_row;
+
+                    let state = self.active_state_mut();
+                    if let Some(popup) = state.popups.get_mut(popup_idx) {
+                        popup.extend_selection(line, relative_col);
+                    }
+                }
+            }
+            return Ok(());
         }
 
         // If dragging popup scrollbar, update popup scroll position
@@ -1747,5 +1869,264 @@ impl Editor {
         }
 
         Ok(())
+    }
+
+    /// Show a tooltip for a file explorer status indicator
+    fn show_file_explorer_status_tooltip(&mut self, path: std::path::PathBuf, col: u16, row: u16) {
+        use crate::view::popup::{Popup, PopupPosition};
+        use ratatui::style::Style;
+
+        let is_directory = path.is_dir();
+
+        // Get the decoration for this file to determine the status
+        let decoration = self
+            .file_explorer_decoration_cache
+            .direct_for_path(&path)
+            .cloned();
+
+        // For directories, also check bubbled decoration
+        let bubbled_decoration = if is_directory && decoration.is_none() {
+            self.file_explorer_decoration_cache
+                .bubbled_for_path(&path)
+                .cloned()
+        } else {
+            None
+        };
+
+        // Check if file/folder has unsaved changes in editor
+        let has_unsaved_changes = if is_directory {
+            // Check if any buffer under this directory has unsaved changes
+            self.buffers.iter().any(|(buffer_id, state)| {
+                if state.buffer.is_modified() {
+                    if let Some(metadata) = self.buffer_metadata.get(buffer_id) {
+                        if let Some(file_path) = metadata.file_path() {
+                            return file_path.starts_with(&path);
+                        }
+                    }
+                }
+                false
+            })
+        } else {
+            self.buffers.iter().any(|(buffer_id, state)| {
+                if state.buffer.is_modified() {
+                    if let Some(metadata) = self.buffer_metadata.get(buffer_id) {
+                        return metadata.file_path() == Some(&path);
+                    }
+                }
+                false
+            })
+        };
+
+        // Build tooltip content
+        let mut lines: Vec<String> = Vec::new();
+
+        if let Some(decoration) = &decoration {
+            let symbol = &decoration.symbol;
+            let explanation = match symbol.as_str() {
+                "U" => "Untracked - File is not tracked by git",
+                "M" => "Modified - File has unstaged changes",
+                "A" => "Added - File is staged for commit",
+                "D" => "Deleted - File is staged for deletion",
+                "R" => "Renamed - File has been renamed",
+                "C" => "Copied - File has been copied",
+                "!" => "Conflicted - File has merge conflicts",
+                "●" => "Has changes - Contains modified files",
+                _ => "Unknown status",
+            };
+            lines.push(format!("{} - {}", symbol, explanation));
+        } else if bubbled_decoration.is_some() {
+            lines.push("● - Contains modified files".to_string());
+        } else if has_unsaved_changes {
+            if is_directory {
+                lines.push("● - Contains unsaved changes".to_string());
+            } else {
+                lines.push("● - Unsaved changes in editor".to_string());
+            }
+        } else {
+            return; // No status to show
+        }
+
+        // For directories, show list of modified files
+        if is_directory {
+            // get_modified_files_in_directory returns None if no files, so no need to check is_empty()
+            if let Some(modified_files) = self.get_modified_files_in_directory(&path) {
+                lines.push(String::new()); // Empty line separator
+                lines.push("Modified files:".to_string());
+                // Resolve symlinks for proper prefix stripping
+                let resolved_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                const MAX_FILES: usize = 8;
+                for (i, file) in modified_files.iter().take(MAX_FILES).enumerate() {
+                    // Show relative path from the directory
+                    let display_name = file
+                        .strip_prefix(&resolved_path)
+                        .unwrap_or(file)
+                        .to_string_lossy()
+                        .to_string();
+                    lines.push(format!("  {}", display_name));
+                    if i == MAX_FILES - 1 && modified_files.len() > MAX_FILES {
+                        lines.push(format!(
+                            "  ... and {} more",
+                            modified_files.len() - MAX_FILES
+                        ));
+                        break;
+                    }
+                }
+            }
+        } else {
+            // For files, try to get git diff stats
+            if let Some(stats) = self.get_git_diff_stats(&path) {
+                lines.push(String::new()); // Empty line separator
+                lines.push(stats);
+            }
+        }
+
+        if lines.is_empty() {
+            return;
+        }
+
+        // Create popup
+        let mut popup = Popup::text(lines, &self.theme);
+        popup.title = Some("Git Status".to_string());
+        popup.transient = true;
+        popup.position = PopupPosition::Fixed { x: col, y: row + 1 };
+        popup.width = 50;
+        popup.max_height = 15;
+        popup.border_style = Style::default().fg(self.theme.popup_border_fg);
+        popup.background_style = Style::default().bg(self.theme.popup_bg);
+
+        // Show the popup
+        if let Some(state) = self.buffers.get_mut(&self.active_buffer()) {
+            state.popups.show(popup);
+        }
+    }
+
+    /// Dismiss the file explorer status tooltip
+    fn dismiss_file_explorer_status_tooltip(&mut self) {
+        // Dismiss any transient popups
+        if let Some(state) = self.buffers.get_mut(&self.active_buffer()) {
+            state.popups.dismiss_transient();
+        }
+    }
+
+    /// Get git diff stats for a file (insertions/deletions)
+    fn get_git_diff_stats(&self, path: &std::path::Path) -> Option<String> {
+        use std::process::Command;
+
+        // Run git diff --numstat for the file
+        let output = Command::new("git")
+            .args(["diff", "--numstat", "--"])
+            .arg(path)
+            .current_dir(&self.working_dir)
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout.lines().next()?;
+        let parts: Vec<&str> = line.split('\t').collect();
+
+        if parts.len() >= 2 {
+            let insertions = parts[0];
+            let deletions = parts[1];
+
+            // Handle binary files (shows as -)
+            if insertions == "-" && deletions == "-" {
+                return Some("Binary file changed".to_string());
+            }
+
+            let ins: i32 = insertions.parse().unwrap_or(0);
+            let del: i32 = deletions.parse().unwrap_or(0);
+
+            if ins > 0 || del > 0 {
+                return Some(format!("+{} -{} lines", ins, del));
+            }
+        }
+
+        // Also check staged changes
+        let staged_output = Command::new("git")
+            .args(["diff", "--numstat", "--cached", "--"])
+            .arg(path)
+            .current_dir(&self.working_dir)
+            .output()
+            .ok()?;
+
+        if staged_output.status.success() {
+            let staged_stdout = String::from_utf8_lossy(&staged_output.stdout);
+            if let Some(line) = staged_stdout.lines().next() {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() >= 2 {
+                    let insertions = parts[0];
+                    let deletions = parts[1];
+
+                    if insertions == "-" && deletions == "-" {
+                        return Some("Binary file staged".to_string());
+                    }
+
+                    let ins: i32 = insertions.parse().unwrap_or(0);
+                    let del: i32 = deletions.parse().unwrap_or(0);
+
+                    if ins > 0 || del > 0 {
+                        return Some(format!("+{} -{} lines (staged)", ins, del));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Get list of modified files in a directory
+    fn get_modified_files_in_directory(
+        &self,
+        dir_path: &std::path::Path,
+    ) -> Option<Vec<std::path::PathBuf>> {
+        use std::process::Command;
+
+        // Resolve symlinks to get the actual directory path
+        let resolved_path = dir_path
+            .canonicalize()
+            .unwrap_or_else(|_| dir_path.to_path_buf());
+
+        // Run git status --porcelain to get list of modified files
+        let output = Command::new("git")
+            .args(["status", "--porcelain", "--"])
+            .arg(&resolved_path)
+            .current_dir(&self.working_dir)
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let modified_files: Vec<std::path::PathBuf> = stdout
+            .lines()
+            .filter_map(|line| {
+                // Git porcelain format: XY filename
+                // where XY is the status (M, A, D, ??, etc.)
+                if line.len() > 3 {
+                    let file_part = &line[3..];
+                    // Handle renamed files (old -> new format)
+                    let file_name = if file_part.contains(" -> ") {
+                        file_part.split(" -> ").last().unwrap_or(file_part)
+                    } else {
+                        file_part
+                    };
+                    Some(self.working_dir.join(file_name))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if modified_files.is_empty() {
+            None
+        } else {
+            Some(modified_files)
+        }
     }
 }

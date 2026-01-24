@@ -11,6 +11,7 @@
 mod common;
 
 use fresh::model::buffer::TextBuffer;
+use fresh::model::filesystem::StdFileSystem;
 use proptest::prelude::*;
 use std::fs;
 use std::io::Write;
@@ -280,7 +281,7 @@ proptest! {
         let file_path = create_temp_file(&temp_dir, "test.txt", &initial_content);
 
         // Load the file
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
         // Apply all operations
         let mut shadow = initial_content.clone();
@@ -302,7 +303,7 @@ proptest! {
         buffer.save_to_file(&save_path).unwrap();
 
         // Reload from the saved file
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         // The reloaded content should match what we had before saving
@@ -331,7 +332,7 @@ proptest! {
         let file_path = create_temp_file(&temp_dir, "test.txt", &initial_content);
 
         // Load the file
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
         // Apply operations
         let mut shadow = initial_content.clone();
@@ -346,7 +347,7 @@ proptest! {
         buffer.save_to_file(&file_path).unwrap();
 
         // Reload
-        let mut reloaded = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -370,7 +371,7 @@ proptest! {
         let mut shadow = initial_content.clone();
 
         // Round 1: load, edit, save
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         for op in &ops1 {
             op.apply(&mut buffer);
             op.apply_to_shadow(&mut shadow);
@@ -378,7 +379,7 @@ proptest! {
         buffer.save_to_file(&file_path).unwrap();
 
         // Round 2: load, edit, save
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         for op in &ops2 {
             op.apply(&mut buffer);
             op.apply_to_shadow(&mut shadow);
@@ -386,7 +387,7 @@ proptest! {
         buffer.save_to_file(&file_path).unwrap();
 
         // Round 3: load, edit, save
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         for op in &ops3 {
             op.apply(&mut buffer);
             op.apply_to_shadow(&mut shadow);
@@ -394,7 +395,7 @@ proptest! {
         buffer.save_to_file(&file_path).unwrap();
 
         // Final verification
-        let mut final_buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut final_buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         let final_content = read_buffer_content(&mut final_buffer);
 
         prop_assert_eq!(
@@ -425,7 +426,7 @@ proptest! {
         let temp_dir = TempDir::new().unwrap();
         let file_path = create_temp_file(&temp_dir, "test.txt", &initial_content);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         let mut shadow = initial_content.clone();
 
         for op in &ops {
@@ -439,7 +440,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -459,7 +460,7 @@ proptest! {
         let temp_dir = TempDir::new().unwrap();
         let file_path = create_temp_file(&temp_dir, "test.txt", &initial_content);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         let mut shadow = initial_content.clone();
 
         let insert_content = b"XYZ".to_vec();
@@ -487,7 +488,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -515,7 +516,7 @@ proptest! {
         }
 
         let file_path = create_temp_file(&temp_dir, "test.txt", &initial_content);
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         let mut shadow = initial_content.clone();
 
         // Insert at line boundaries
@@ -535,7 +536,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -574,7 +575,7 @@ proptest! {
         let file_path = create_temp_file(&temp_dir, "large.txt", &initial_content);
 
         // Load with a low threshold to trigger large file mode
-        let mut buffer = TextBuffer::load_from_file(&file_path, 1000).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 1000, test_fs()).unwrap();
 
         // Make a single edit (this should only load the affected region)
         let edit_offset = (file_size * (edit_offset_percent as usize)) / 255;
@@ -597,7 +598,7 @@ proptest! {
         buffer.save_to_file(&save_path).unwrap();
 
         // Reload (as small file to verify full content)
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -621,7 +622,7 @@ proptest! {
         let file_path = create_temp_file(&temp_dir, "large.txt", &initial_content);
 
         // Load as large file
-        let mut buffer = TextBuffer::load_from_file(&file_path, 1000).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 1000, test_fs()).unwrap();
         let mut expected = initial_content.clone();
 
         // Make scattered edits (process in reverse order to maintain offsets)
@@ -646,7 +647,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -666,7 +667,7 @@ proptest! {
         let initial_content: Vec<u8> = (0..file_size).map(|_| b'x').collect();
         let file_path = create_temp_file(&temp_dir, "large.txt", &initial_content);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 1000).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 1000, test_fs()).unwrap();
         buffer.insert_bytes(0, insert_content.clone());
 
         let mut expected = insert_content.clone();
@@ -675,7 +676,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(&reloaded_content, &expected, "Edit at start failed");
@@ -691,7 +692,7 @@ proptest! {
         let initial_content: Vec<u8> = (0..file_size).map(|_| b'x').collect();
         let file_path = create_temp_file(&temp_dir, "large.txt", &initial_content);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 1000).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 1000, test_fs()).unwrap();
         buffer.insert_bytes(file_size, insert_content.clone());
 
         let mut expected = initial_content.clone();
@@ -700,7 +701,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(&reloaded_content, &expected, "Edit at end failed");
@@ -726,7 +727,7 @@ proptest! {
         let temp_dir = TempDir::new().unwrap();
         let file_path = create_temp_file(&temp_dir, "empty.txt", &[]);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         let mut shadow: Vec<u8> = vec![];
 
         for op in &ops {
@@ -740,7 +741,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -758,7 +759,7 @@ proptest! {
         let temp_dir = TempDir::new().unwrap();
         let file_path = create_temp_file(&temp_dir, "test.txt", &initial_content);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
         // Delete all content
         let total = buffer.total_bytes();
@@ -771,7 +772,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         prop_assert_eq!(reloaded.total_bytes(), 0, "Reloaded buffer should be empty");
     }
 }
@@ -797,7 +798,7 @@ proptest! {
         let initial_content: Vec<u8> = (0..initial_size).map(|i| b'a' + (i % 26) as u8).collect();
         let file_path = create_temp_file(&temp_dir, "test.txt", &initial_content);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
         let mut expected = initial_content.clone();
 
         // Add content to grow the file
@@ -810,7 +811,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(&reloaded_content, &expected, "Growing file roundtrip failed");
@@ -826,7 +827,7 @@ proptest! {
         let initial_content: Vec<u8> = (0..initial_size).map(|i| b'a' + (i % 26) as u8).collect();
         let file_path = create_temp_file(&temp_dir, "test.txt", &initial_content);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
         // Delete a percentage of the content
         let delete_amount = (initial_size * (shrink_percent as usize)) / 100;
@@ -837,7 +838,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(&reloaded_content, &expected, "Shrinking file roundtrip failed");
@@ -848,12 +849,16 @@ proptest! {
 // Targeted Unit Tests for Specific Edge Cases
 // =============================================================================
 
+fn test_fs() -> std::sync::Arc<dyn fresh::model::filesystem::FileSystem + Send + Sync> {
+    std::sync::Arc::new(StdFileSystem)
+}
+
 #[test]
 fn test_single_byte_file_roundtrip() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = create_temp_file(&temp_dir, "single.txt", b"X");
 
-    let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+    let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
     assert_eq!(buffer.total_bytes(), 1);
 
     // Edit the single byte
@@ -863,7 +868,7 @@ fn test_single_byte_file_roundtrip() {
     let save_path = temp_dir.path().join("saved.txt");
     buffer.save_to_file(&save_path).unwrap();
 
-    let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+    let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
     let content = read_buffer_content(&mut reloaded);
     assert_eq!(content, b"Y");
 }
@@ -873,7 +878,7 @@ fn test_newline_only_file_roundtrip() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = create_temp_file(&temp_dir, "newlines.txt", b"\n\n\n");
 
-    let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+    let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
     // Insert between newlines
     buffer.insert_bytes(1, b"text".to_vec());
@@ -881,7 +886,7 @@ fn test_newline_only_file_roundtrip() {
     let save_path = temp_dir.path().join("saved.txt");
     buffer.save_to_file(&save_path).unwrap();
 
-    let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+    let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
     let content = read_buffer_content(&mut reloaded);
     assert_eq!(content, b"\ntext\n\n");
 }
@@ -897,7 +902,7 @@ fn test_binary_like_content_roundtrip() {
     initial.extend(14u8..=255); // Skip CR (13)
     let file_path = create_temp_file(&temp_dir, "binary.bin", &initial);
 
-    let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+    let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
     // Insert in the middle
     buffer.insert_bytes(128, b"MIDDLE".to_vec());
@@ -908,7 +913,7 @@ fn test_binary_like_content_roundtrip() {
     let save_path = temp_dir.path().join("saved.bin");
     buffer.save_to_file(&save_path).unwrap();
 
-    let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+    let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
     let content = read_buffer_content(&mut reloaded);
     assert_eq!(content, expected);
 }
@@ -922,7 +927,7 @@ fn test_cr_preserved_in_binary_content() {
     let initial = b"hello\rworld".to_vec();
     let file_path = create_temp_file(&temp_dir, "cr.txt", &initial);
 
-    let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+    let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
     let content = read_buffer_content(&mut buffer);
 
     // CR should be preserved
@@ -932,7 +937,7 @@ fn test_cr_preserved_in_binary_content() {
     let save_path = temp_dir.path().join("saved.txt");
     buffer.save_to_file(&save_path).unwrap();
 
-    let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+    let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
     let reloaded_content = read_buffer_content(&mut reloaded);
     assert_eq!(reloaded_content, b"hello\rworld");
 }
@@ -945,7 +950,7 @@ fn test_repeated_save_load_cycles() {
     let mut content = b"initial".to_vec();
 
     for i in 0..10 {
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
         // Add a marker for this cycle
         let marker = format!("[{}]", i).into_bytes();
@@ -955,7 +960,7 @@ fn test_repeated_save_load_cycles() {
         buffer.save_to_file(&file_path).unwrap();
     }
 
-    let mut final_buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+    let mut final_buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
     let final_content = read_buffer_content(&mut final_buffer);
     assert_eq!(final_content, content);
 }
@@ -970,7 +975,7 @@ fn test_large_file_edit_in_middle_preserves_unloaded() {
     let file_path = create_temp_file(&temp_dir, "large.txt", &initial);
 
     // Load with low threshold to trigger lazy loading
-    let mut buffer = TextBuffer::load_from_file(&file_path, 1000).unwrap();
+    let mut buffer = TextBuffer::load_from_file(&file_path, 1000, test_fs()).unwrap();
 
     // Edit exactly in the middle
     let mid = size / 2;
@@ -1062,7 +1067,7 @@ proptest! {
         let file_path = create_temp_file(&temp_dir, "crlf.txt", &content);
 
         // Load the file (bytes are preserved, no normalization)
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
         // Content internally should preserve original bytes including CRLF
         let internal_content = read_buffer_content(&mut buffer);
@@ -1095,7 +1100,7 @@ proptest! {
         );
 
         // Reload and verify content matches
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -1114,7 +1119,7 @@ proptest! {
         let temp_dir = TempDir::new().unwrap();
         let file_path = create_temp_file(&temp_dir, "lf.txt", &content);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
         for op in &ops {
             op.apply(&mut buffer);
@@ -1133,7 +1138,7 @@ proptest! {
         );
 
         // Reload and verify
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -1151,7 +1156,7 @@ proptest! {
         let temp_dir = TempDir::new().unwrap();
         let file_path = create_temp_file(&temp_dir, "mixed.txt", &content);
 
-        let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
         // Internal content should preserve original bytes
         let internal_content = read_buffer_content(&mut buffer);
@@ -1173,7 +1178,7 @@ proptest! {
         let save_path = temp_dir.path().join("saved.txt");
         buffer.save_to_file(&save_path).unwrap();
 
-        let mut reloaded = TextBuffer::load_from_file(&save_path, 0).unwrap();
+        let mut reloaded = TextBuffer::load_from_file(&save_path, 0, test_fs()).unwrap();
         let reloaded_content = read_buffer_content(&mut reloaded);
 
         prop_assert_eq!(
@@ -1194,7 +1199,7 @@ fn test_crlf_preserved_after_edit() {
     let crlf_content = b"line1\r\nline2\r\nline3\r\n";
     let file_path = create_temp_file(&temp_dir, "crlf.txt", crlf_content);
 
-    let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+    let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
     // Content is preserved as-is: "line1\r\nline2\r\nline3\r\n"
     // Insert after "line1\r\n" (offset 7)
@@ -1218,7 +1223,7 @@ fn test_lf_file_no_crlf_after_save() {
     let lf_content = b"line1\nline2\nline3\n";
     let file_path = create_temp_file(&temp_dir, "lf.txt", lf_content);
 
-    let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+    let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
     buffer.insert_bytes(6, b"inserted\n".to_vec());
 
     let save_path = temp_dir.path().join("saved.txt");
@@ -1238,7 +1243,7 @@ fn test_empty_lines_with_crlf() {
     let content = b"line1\r\n\r\n\r\nline2\r\n";
     let file_path = create_temp_file(&temp_dir, "empty_lines.txt", content);
 
-    let mut buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+    let mut buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
     // Content is preserved (no normalization)
     let internal = read_buffer_content(&mut buffer);

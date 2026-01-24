@@ -14,6 +14,7 @@ pub mod markdown;
 pub mod overlay;
 pub mod popup;
 pub mod popup_input;
+pub mod popup_mouse;
 pub mod prompt;
 pub mod prompt_input;
 pub mod query_replace_input;

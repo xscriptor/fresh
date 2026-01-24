@@ -1,5 +1,6 @@
 /// Text buffer that uses PieceTree with integrated line tracking
 /// Architecture where the tree is the single source of truth for text and line information
+use crate::model::filesystem::{FileMetadata, FileSystem};
 use crate::model::piece_tree::{
     BufferData, BufferLocation, Cursor, PieceInfo, PieceRangeIter, PieceTree, Position,
     StringBuffer, TreeStats,
@@ -12,9 +13,6 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 
 /// Error returned when a file save operation requires elevated privileges.
 ///
@@ -131,6 +129,10 @@ impl LineNumber {
 /// A text buffer that manages document content using a piece table
 /// with integrated line tracking
 pub struct TextBuffer {
+    /// Filesystem abstraction for file I/O operations.
+    /// Stored internally so methods can access it without threading through call chains.
+    fs: Arc<dyn FileSystem + Send + Sync>,
+
     /// The piece tree for efficient text manipulation with integrated line tracking
     piece_tree: PieceTree,
 
@@ -181,12 +183,13 @@ pub struct TextBuffer {
 }
 
 impl TextBuffer {
-    /// Create a new text buffer (with large_file_threshold for backwards compatibility)
+    /// Create a new text buffer with the given filesystem implementation.
     /// Note: large_file_threshold is ignored in the new implementation
-    pub fn new(_large_file_threshold: usize) -> Self {
+    pub fn new(_large_file_threshold: usize, fs: Arc<dyn FileSystem + Send + Sync>) -> Self {
         let piece_tree = PieceTree::empty();
         let line_ending = LineEnding::default();
         TextBuffer {
+            fs,
             saved_root: piece_tree.root(),
             piece_tree,
             buffers: vec![StringBuffer::new(0, Vec::new())],
@@ -208,6 +211,16 @@ impl TextBuffer {
         self.version
     }
 
+    /// Get a reference to the filesystem implementation used by this buffer.
+    pub fn filesystem(&self) -> &Arc<dyn FileSystem + Send + Sync> {
+        &self.fs
+    }
+
+    /// Set the filesystem implementation for this buffer.
+    pub fn set_filesystem(&mut self, fs: Arc<dyn FileSystem + Send + Sync>) {
+        self.fs = fs;
+    }
+
     #[inline]
     fn bump_version(&mut self) {
         self.version = self.version.wrapping_add(1);
@@ -220,8 +233,8 @@ impl TextBuffer {
         self.bump_version();
     }
 
-    /// Create a text buffer from initial content
-    pub fn from_bytes(content: Vec<u8>) -> Self {
+    /// Create a text buffer from initial content with the given filesystem.
+    pub fn from_bytes(content: Vec<u8>, fs: Arc<dyn FileSystem + Send + Sync>) -> Self {
         let bytes = content.len();
 
         // Auto-detect line ending format from content
@@ -240,6 +253,7 @@ impl TextBuffer {
         let saved_root = piece_tree.root();
 
         TextBuffer {
+            fs,
             line_ending,
             original_line_ending: line_ending,
             piece_tree,
@@ -256,17 +270,22 @@ impl TextBuffer {
         }
     }
 
-    /// Create a text buffer from a string
-    pub fn from_str(s: &str, _large_file_threshold: usize) -> Self {
-        Self::from_bytes(s.as_bytes().to_vec())
+    /// Create a text buffer from a string with the given filesystem.
+    pub fn from_str(
+        s: &str,
+        _large_file_threshold: usize,
+        fs: Arc<dyn FileSystem + Send + Sync>,
+    ) -> Self {
+        Self::from_bytes(s.as_bytes().to_vec(), fs)
     }
 
-    /// Create an empty text buffer
-    pub fn empty() -> Self {
+    /// Create an empty text buffer with the given filesystem.
+    pub fn empty(fs: Arc<dyn FileSystem + Send + Sync>) -> Self {
         let piece_tree = PieceTree::empty();
         let saved_root = piece_tree.root();
         let line_ending = LineEnding::default();
         TextBuffer {
+            fs,
             piece_tree,
             saved_root,
             buffers: vec![StringBuffer::new(0, Vec::new())],
@@ -283,16 +302,17 @@ impl TextBuffer {
         }
     }
 
-    /// Load a text buffer from a file
+    /// Load a text buffer from a file using the given filesystem.
     pub fn load_from_file<P: AsRef<Path>>(
         path: P,
         large_file_threshold: usize,
+        fs: Arc<dyn FileSystem + Send + Sync>,
     ) -> anyhow::Result<Self> {
         let path = path.as_ref();
 
         // Get file size to determine loading strategy
-        let metadata = std::fs::metadata(path)?;
-        let file_size = metadata.len() as usize;
+        let metadata = fs.metadata(path)?;
+        let file_size = metadata.size as usize;
 
         // Use threshold parameter or default
         let threshold = if large_file_threshold > 0 {
@@ -303,18 +323,15 @@ impl TextBuffer {
 
         // Choose loading strategy based on file size
         if file_size >= threshold {
-            Self::load_large_file(path, file_size)
+            Self::load_large_file(path, file_size, fs)
         } else {
-            Self::load_small_file(path)
+            Self::load_small_file(path, fs)
         }
     }
 
     /// Load a small file with full eager loading and line indexing
-    fn load_small_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        let path = path.as_ref();
-        let mut file = std::fs::File::open(path)?;
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)?;
+    fn load_small_file(path: &Path, fs: Arc<dyn FileSystem + Send + Sync>) -> anyhow::Result<Self> {
+        let contents = fs.read_file(path)?;
 
         // Detect if this is a binary file
         let is_binary = Self::detect_binary(&contents);
@@ -323,7 +340,7 @@ impl TextBuffer {
         let line_ending = Self::detect_line_ending(&contents);
 
         // Keep original line endings - the view layer handles CRLF display
-        let mut buffer = Self::from_bytes(contents);
+        let mut buffer = Self::from_bytes(contents, fs);
         buffer.file_path = Some(path.to_path_buf());
         buffer.modified = false;
         buffer.large_file = false;
@@ -334,22 +351,19 @@ impl TextBuffer {
     }
 
     /// Load a large file with unloaded buffer (no line indexing, lazy loading)
-    fn load_large_file<P: AsRef<Path>>(path: P, file_size: usize) -> anyhow::Result<Self> {
+    fn load_large_file(
+        path: &Path,
+        file_size: usize,
+        fs: Arc<dyn FileSystem + Send + Sync>,
+    ) -> anyhow::Result<Self> {
         use crate::model::piece_tree::{BufferData, BufferLocation};
-
-        let path = path.as_ref();
 
         // Read a sample of the file to detect if it's binary and line ending format
         // We read the first 8KB for both binary and line ending detection
-        let (is_binary, line_ending) = {
-            let mut file = std::fs::File::open(path)?;
-            let sample_size = file_size.min(8 * 1024);
-            let mut sample = vec![0u8; sample_size];
-            file.read_exact(&mut sample)?;
-            let is_binary = Self::detect_binary(&sample);
-            let line_ending = Self::detect_line_ending(&sample);
-            (is_binary, line_ending)
-        };
+        let sample_size = file_size.min(8 * 1024);
+        let sample = fs.read_range(path, 0, sample_size)?;
+        let is_binary = Self::detect_binary(&sample);
+        let line_ending = Self::detect_line_ending(&sample);
 
         // Create an unloaded buffer that references the entire file
         let buffer = StringBuffer {
@@ -377,6 +391,7 @@ impl TextBuffer {
         );
 
         Ok(TextBuffer {
+            fs,
             piece_tree,
             saved_root,
             buffers: vec![buffer],
@@ -405,59 +420,33 @@ impl TextBuffer {
         }
     }
 
-    /// Create a temporary file for saving.
-    ///
-    /// Tries to create the file in the same directory as the destination file first
-    /// to allow for an atomic rename. If that fails (e.g., due to directory permissions),
-    /// falls back to the system temporary directory.
     /// Check if we should use in-place writing to preserve file ownership.
     /// Returns true if the file exists and is owned by a different user.
     /// On Unix, only root or the file owner can change file ownership with chown.
     /// When the current user is not the file owner, using atomic write (temp file + rename)
     /// would change the file's ownership to the current user. To preserve ownership,
     /// we must write directly to the existing file instead.
-    #[cfg(unix)]
-    fn should_use_inplace_write(dest_path: &Path) -> bool {
-        if let Ok(meta) = std::fs::metadata(dest_path) {
-            let file_uid = meta.uid();
-            let current_uid = unsafe { libc::getuid() };
-            // If file is owned by a different user, we should write in-place
-            // to preserve ownership (since we can't chown to another user)
-            file_uid != current_uid
-        } else {
-            // File doesn't exist, use normal atomic write
-            false
-        }
+    fn should_use_inplace_write(&self, dest_path: &Path) -> bool {
+        !self.fs.is_owner(dest_path)
     }
 
-    #[cfg(not(unix))]
-    fn should_use_inplace_write(_dest_path: &Path) -> bool {
-        // On non-Unix platforms, always use atomic write
-        false
-    }
-
-    fn create_temp_file(dest_path: &Path) -> io::Result<(PathBuf, std::fs::File)> {
+    /// Create a temporary file for saving.
+    ///
+    /// Tries to create the file in the same directory as the destination file first
+    /// to allow for an atomic rename. If that fails (e.g., due to directory permissions),
+    /// falls back to the system temporary directory.
+    fn create_temp_file(
+        &self,
+        dest_path: &Path,
+    ) -> io::Result<(PathBuf, Box<dyn crate::model::filesystem::FileWriter>)> {
         // Try creating in same directory first
-        let same_dir_temp = dest_path.with_extension("tmp");
-        match std::fs::File::create(&same_dir_temp) {
+        let same_dir_temp = self.fs.temp_path_for(dest_path);
+        match self.fs.create_file(&same_dir_temp) {
             Ok(file) => Ok((same_dir_temp, file)),
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
                 // Fallback to system temp directory
-                let temp_dir = std::env::temp_dir();
-                let file_name = dest_path
-                    .file_name()
-                    .unwrap_or_else(|| std::ffi::OsStr::new("fresh-save"));
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0);
-                let temp_path = temp_dir.join(format!(
-                    "{}-{}-{}.tmp",
-                    file_name.to_string_lossy(),
-                    std::process::id(),
-                    timestamp
-                ));
-                let file = std::fs::File::create(&temp_path)?;
+                let temp_path = self.fs.unique_temp_path(dest_path);
+                let file = self.fs.create_file(&temp_path)?;
                 Ok((temp_path, file))
             }
             Err(e) => Err(e),
@@ -478,7 +467,7 @@ impl TextBuffer {
 
         // Get original file metadata (permissions, owner, etc.) before writing
         // so we can preserve it after creating/renaming the temp file
-        let original_metadata = std::fs::metadata(dest_path).ok();
+        let original_metadata = self.fs.metadata_if_exists(dest_path);
 
         // Check if we need to convert line endings
         let needs_conversion = self.line_ending != self.original_line_ending;
@@ -488,34 +477,36 @@ impl TextBuffer {
         // When the file is owned by a different user (e.g., editing with group write
         // permissions), we must write directly to the file to preserve ownership,
         // since non-root users cannot chown files to other users.
-        let use_inplace = Self::should_use_inplace_write(dest_path);
+        let use_inplace = self.should_use_inplace_write(dest_path);
 
         // Stage A: Create output file (either temp file or open existing for in-place write)
-        let (temp_path, mut out_file) = if use_inplace {
+        let (temp_path, mut out_file): (
+            Option<PathBuf>,
+            Box<dyn crate::model::filesystem::FileWriter>,
+        ) = if use_inplace {
             // In-place write: open existing file with truncate to preserve ownership
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(dest_path)
-            {
+            match self.fs.open_file_for_write(dest_path) {
                 Ok(file) => (None, file),
                 Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
                     // Permission denied on in-place write: fall back to atomic write
                     // with temp file. The rename will also fail, triggering SudoSaveRequired.
-                    let (path, file) = Self::create_temp_file(dest_path)?;
+                    let (path, file) = self.create_temp_file(dest_path)?;
                     (Some(path), file)
                 }
                 Err(e) => return Err(e.into()),
             }
         } else {
             // Atomic write: create temp file, will rename later
-            let (path, file) = Self::create_temp_file(dest_path)?;
+            let (path, file) = self.create_temp_file(dest_path)?;
             (Some(path), file)
         };
 
         if total > 0 {
             // Cache for open source files (for streaming unloaded regions)
-            let mut source_file_cache: Option<(PathBuf, std::fs::File)> = None;
+            let mut source_file_cache: Option<(
+                PathBuf,
+                Box<dyn crate::model::filesystem::FileReader>,
+            )> = None;
 
             // Iterate through all pieces and write them
             for piece_view in self.piece_tree.iter_pieces_in_range(0, total) {
@@ -547,15 +538,16 @@ impl TextBuffer {
                         file_offset,
                         ..
                     } => {
-                        // Stream from source file
-                        let source_file = match &mut source_file_cache {
-                            Some((cached_path, file)) if cached_path == file_path => file,
-                            _ => {
-                                let file = std::fs::File::open(file_path)?;
-                                source_file_cache = Some((file_path.clone(), file));
-                                &mut source_file_cache.as_mut().unwrap().1
-                            }
-                        };
+                        // Stream from source file using the filesystem abstraction
+                        let source_file: &mut Box<dyn crate::model::filesystem::FileReader> =
+                            match &mut source_file_cache {
+                                Some((cached_path, file)) if cached_path == file_path => file,
+                                _ => {
+                                    let file = self.fs.open_file(file_path)?;
+                                    source_file_cache = Some((file_path.clone(), file));
+                                    &mut source_file_cache.as_mut().unwrap().1
+                                }
+                            };
 
                         // Seek to the right position in source file
                         let read_offset = *file_offset + piece_view.buffer_offset;
@@ -594,23 +586,25 @@ impl TextBuffer {
 
         // Stage B & C: Only needed for atomic write (not in-place write)
         if let Some(temp_path) = temp_path {
-            // Restore original file permissions/owner before renaming
+            // Restore original file permissions before renaming
             if let Some(ref meta) = original_metadata {
-                // Best effort restore
-                let _ = Self::restore_file_metadata(&temp_path, meta);
+                if let Some(ref perms) = meta.permissions {
+                    // Best effort restore
+                    let _ = self.fs.set_permissions(&temp_path, perms);
+                }
             }
 
             // Stage C: Atomic Replacement or Sudo Fallback
-            if let Err(e) = std::fs::rename(&temp_path, dest_path) {
+            if let Err(e) = self.fs.rename(&temp_path, dest_path) {
                 let is_permission_denied = e.kind() == io::ErrorKind::PermissionDenied;
                 let is_cross_device = cfg!(unix) && e.raw_os_error() == Some(18);
 
                 if is_cross_device {
                     #[cfg(unix)]
                     {
-                        match std::fs::copy(&temp_path, dest_path) {
+                        match self.fs.copy(&temp_path, dest_path) {
                             Ok(_) => {
-                                let _ = std::fs::remove_file(&temp_path);
+                                let _ = self.fs.remove_file(&temp_path);
                             }
                             Err(copy_err) if copy_err.kind() == io::ErrorKind::PermissionDenied => {
                                 return Err(self.make_sudo_error(
@@ -633,7 +627,7 @@ impl TextBuffer {
         // preserving ownership since we modified the existing inode
 
         // Update saved file size to match the file on disk
-        let new_size = std::fs::metadata(dest_path)?.len() as usize;
+        let new_size = self.fs.metadata(dest_path)?.size as usize;
         tracing::debug!(
             "Buffer::save: updating saved_file_size from {:?} to {}",
             self.saved_file_size,
@@ -655,7 +649,7 @@ impl TextBuffer {
     ///
     /// This updates the saved snapshot and file size to match the new state on disk.
     pub fn finalize_external_save(&mut self, dest_path: PathBuf) -> anyhow::Result<()> {
-        let new_size = std::fs::metadata(&dest_path)?.len() as usize;
+        let new_size = self.fs.metadata(&dest_path)?.size as usize;
         self.saved_file_size = Some(new_size);
         self.file_path = Some(dest_path);
         self.mark_saved_snapshot();
@@ -668,18 +662,25 @@ impl TextBuffer {
         &self,
         temp_path: PathBuf,
         dest_path: &Path,
-        original_metadata: Option<std::fs::Metadata>,
+        original_metadata: Option<FileMetadata>,
     ) -> anyhow::Error {
-        let (uid, gid, mode) = if let Some(meta) = original_metadata {
-            #[cfg(unix)]
-            {
-                (meta.uid(), meta.gid(), meta.mode() & 0o7777)
-            }
-            #[cfg(not(unix))]
-            (0, 0, 0)
+        #[cfg(unix)]
+        let (uid, gid, mode) = if let Some(ref meta) = original_metadata {
+            (
+                meta.uid.unwrap_or(0),
+                meta.gid.unwrap_or(0),
+                meta.permissions
+                    .as_ref()
+                    .map(|p| p.mode() & 0o7777)
+                    .unwrap_or(0),
+            )
         } else {
             (0, 0, 0)
         };
+        #[cfg(not(unix))]
+        let (uid, gid, mode) = (0u32, 0u32, 0u32);
+
+        let _ = original_metadata; // suppress unused warning on non-Unix
 
         anyhow::anyhow!(SudoSaveRequired {
             temp_path,
@@ -688,29 +689,6 @@ impl TextBuffer {
             gid,
             mode,
         })
-    }
-
-    /// Restore file metadata (permissions, owner/group) from original file
-    fn restore_file_metadata(path: &Path, original_meta: &std::fs::Metadata) -> anyhow::Result<()> {
-        // Restore permissions (works cross-platform)
-        std::fs::set_permissions(path, original_meta.permissions())?;
-
-        // On Unix, also restore owner and group
-        #[cfg(unix)]
-        {
-            let uid = original_meta.uid();
-            let gid = original_meta.gid();
-            // Use libc to set owner/group - ignore errors since we may not have permission
-            // (e.g., only root can chown to a different user)
-            unsafe {
-                use std::os::unix::ffi::OsStrExt;
-                let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                libc::chown(c_path.as_ptr(), uid, gid);
-            }
-        }
-
-        Ok(())
     }
 
     /// Get the total number of bytes in the document
@@ -2590,13 +2568,16 @@ impl TextBuffer {
     /// Create a buffer from a string for testing
     #[cfg(test)]
     pub fn from_str_test(s: &str) -> Self {
-        Self::from_bytes(s.as_bytes().to_vec())
+        Self::from_bytes(
+            s.as_bytes().to_vec(),
+            std::sync::Arc::new(crate::model::filesystem::StdFileSystem),
+        )
     }
 
     /// Create a new empty buffer for testing
     #[cfg(test)]
     pub fn new_test() -> Self {
-        Self::empty()
+        Self::empty(std::sync::Arc::new(crate::model::filesystem::StdFileSystem))
     }
 }
 
@@ -2840,18 +2821,24 @@ impl<'a> Iterator for OverlappingChunks<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use super::*;
 
     #[test]
     fn test_empty_buffer() {
-        let buffer = TextBuffer::empty();
+        let buffer = TextBuffer::empty(test_fs());
         assert_eq!(buffer.total_bytes(), 0);
         assert_eq!(buffer.line_count(), Some(1)); // Empty doc has 1 line
     }
 
     #[test]
     fn test_line_positions_multiline() {
-        let buffer = TextBuffer::from_bytes(b"Hello\nNew Line\nWorld!".to_vec());
+        let buffer = TextBuffer::from_bytes(b"Hello\nNew Line\nWorld!".to_vec(), test_fs());
 
         // Check line count
         assert_eq!(buffer.line_count(), Some(3));
@@ -2877,20 +2864,20 @@ mod tests {
 
     #[test]
     fn test_new_from_content() {
-        let buffer = TextBuffer::from_bytes(b"hello\nworld".to_vec());
+        let buffer = TextBuffer::from_bytes(b"hello\nworld".to_vec(), test_fs());
         assert_eq!(buffer.total_bytes(), 11);
         assert_eq!(buffer.line_count(), Some(2));
     }
 
     #[test]
     fn test_get_all_text() {
-        let buffer = TextBuffer::from_bytes(b"hello\nworld".to_vec());
+        let buffer = TextBuffer::from_bytes(b"hello\nworld".to_vec(), test_fs());
         assert_eq!(buffer.get_all_text().unwrap(), b"hello\nworld");
     }
 
     #[test]
     fn test_insert_at_start() {
-        let mut buffer = TextBuffer::from_bytes(b"world".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"world".to_vec(), test_fs());
         buffer.insert_bytes(0, b"hello ".to_vec());
 
         assert_eq!(buffer.get_all_text().unwrap(), b"hello world");
@@ -2899,7 +2886,7 @@ mod tests {
 
     #[test]
     fn test_insert_in_middle() {
-        let mut buffer = TextBuffer::from_bytes(b"helloworld".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"helloworld".to_vec(), test_fs());
         buffer.insert_bytes(5, b" ".to_vec());
 
         assert_eq!(buffer.get_all_text().unwrap(), b"hello world");
@@ -2908,7 +2895,7 @@ mod tests {
 
     #[test]
     fn test_insert_at_end() {
-        let mut buffer = TextBuffer::from_bytes(b"hello".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"hello".to_vec(), test_fs());
         buffer.insert_bytes(5, b" world".to_vec());
 
         assert_eq!(buffer.get_all_text().unwrap(), b"hello world");
@@ -2917,7 +2904,7 @@ mod tests {
 
     #[test]
     fn test_insert_with_newlines() {
-        let mut buffer = TextBuffer::from_bytes(b"hello".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"hello".to_vec(), test_fs());
         buffer.insert_bytes(5, b"\nworld\ntest".to_vec());
 
         assert_eq!(buffer.get_all_text().unwrap(), b"hello\nworld\ntest");
@@ -2926,7 +2913,7 @@ mod tests {
 
     #[test]
     fn test_delete_from_start() {
-        let mut buffer = TextBuffer::from_bytes(b"hello world".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"hello world".to_vec(), test_fs());
         buffer.delete_bytes(0, 6);
 
         assert_eq!(buffer.get_all_text().unwrap(), b"world");
@@ -2935,7 +2922,7 @@ mod tests {
 
     #[test]
     fn test_delete_from_middle() {
-        let mut buffer = TextBuffer::from_bytes(b"hello world".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"hello world".to_vec(), test_fs());
         buffer.delete_bytes(5, 1);
 
         assert_eq!(buffer.get_all_text().unwrap(), b"helloworld");
@@ -2944,7 +2931,7 @@ mod tests {
 
     #[test]
     fn test_delete_from_end() {
-        let mut buffer = TextBuffer::from_bytes(b"hello world".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"hello world".to_vec(), test_fs());
         buffer.delete_bytes(6, 5);
 
         assert_eq!(buffer.get_all_text().unwrap(), b"hello ");
@@ -2953,7 +2940,7 @@ mod tests {
 
     #[test]
     fn test_delete_with_newlines() {
-        let mut buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec(), test_fs());
         buffer.delete_bytes(5, 7); // Delete "\nworld\n"
 
         assert_eq!(buffer.get_all_text().unwrap(), b"hellotest");
@@ -2962,7 +2949,7 @@ mod tests {
 
     #[test]
     fn test_offset_position_conversions() {
-        let buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec());
+        let buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec(), test_fs());
 
         let pos = buffer.offset_to_position(0);
         assert_eq!(pos, Some(Position { line: 0, column: 0 }));
@@ -2976,7 +2963,7 @@ mod tests {
 
     #[test]
     fn test_insert_at_position() {
-        let mut buffer = TextBuffer::from_bytes(b"hello\nworld".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"hello\nworld".to_vec(), test_fs());
         buffer.insert_at_position(Position { line: 1, column: 0 }, b"beautiful ".to_vec());
 
         assert_eq!(buffer.get_all_text().unwrap(), b"hello\nbeautiful world");
@@ -2984,7 +2971,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let mut buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec(), test_fs());
 
         let start = Position { line: 0, column: 5 };
         let end = Position { line: 2, column: 0 };
@@ -2995,7 +2982,7 @@ mod tests {
 
     #[test]
     fn test_get_line() {
-        let buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec());
+        let buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec(), test_fs());
 
         assert_eq!(buffer.get_line(0), Some(b"hello\n".to_vec()));
         assert_eq!(buffer.get_line(1), Some(b"world\n".to_vec()));
@@ -3005,7 +2992,7 @@ mod tests {
 
     #[test]
     fn test_multiple_operations() {
-        let mut buffer = TextBuffer::from_bytes(b"line1\nline2\nline3".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"line1\nline2\nline3".to_vec(), test_fs());
 
         buffer.insert_bytes(0, b"start\n".to_vec());
         assert_eq!(buffer.line_count(), Some(4));
@@ -3022,7 +3009,7 @@ mod tests {
 
     #[test]
     fn test_get_text_range() {
-        let buffer = TextBuffer::from_bytes(b"hello world".to_vec());
+        let buffer = TextBuffer::from_bytes(b"hello world".to_vec(), test_fs());
 
         assert_eq!(buffer.get_text_range(0, 5), Some(b"hello".to_vec()));
         assert_eq!(buffer.get_text_range(6, 5), Some(b"world".to_vec()));
@@ -3031,7 +3018,7 @@ mod tests {
 
     #[test]
     fn test_empty_operations() {
-        let mut buffer = TextBuffer::from_bytes(b"hello".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"hello".to_vec(), test_fs());
 
         buffer.insert_bytes(2, Vec::new());
         assert_eq!(buffer.get_all_text().unwrap(), b"hello");
@@ -3043,7 +3030,7 @@ mod tests {
     #[test]
     fn test_sequential_inserts_at_beginning() {
         // Regression test for piece tree duplicate insertion bug
-        let mut buffer = TextBuffer::from_bytes(b"initial\ntext".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"initial\ntext".to_vec(), test_fs());
 
         // Delete all
         buffer.delete_bytes(0, 12);
@@ -3086,7 +3073,7 @@ mod tests {
 
         #[test]
         fn test_line_count_is_some_for_small_buffer() {
-            let buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec());
+            let buffer = TextBuffer::from_bytes(b"hello\nworld\ntest".to_vec(), test_fs());
             assert_eq!(buffer.line_count(), Some(3));
         }
 
@@ -3194,7 +3181,7 @@ mod tests {
                 .unwrap();
 
             // Load with default threshold
-            let buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+            let buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
             // Should be eagerly loaded (not large_file mode)
             assert!(!buffer.large_file);
@@ -3219,7 +3206,7 @@ mod tests {
                 .unwrap();
 
             // Load with threshold of 10 bytes (file is 17 bytes, so it's "large")
-            let buffer = TextBuffer::load_from_file(&file_path, 10).unwrap();
+            let buffer = TextBuffer::load_from_file(&file_path, 10, test_fs()).unwrap();
 
             // Should be in large_file mode
             assert!(buffer.large_file);
@@ -3253,7 +3240,7 @@ mod tests {
                 .unwrap();
 
             // Load with small threshold to force lazy loading
-            let mut buffer = TextBuffer::load_from_file(&file_path, 10).unwrap();
+            let mut buffer = TextBuffer::load_from_file(&file_path, 10, test_fs()).unwrap();
 
             // Verify we're in large file mode with unloaded buffer
             assert!(buffer.large_file, "Buffer should be in large file mode");
@@ -3300,7 +3287,7 @@ mod tests {
                 .unwrap();
 
             // Load with threshold of 100 bytes - should be large file (>= threshold)
-            let buffer = TextBuffer::load_from_file(&file_path, 100).unwrap();
+            let buffer = TextBuffer::load_from_file(&file_path, 100, test_fs()).unwrap();
             assert!(buffer.large_file);
 
             // Test just below threshold
@@ -3312,7 +3299,7 @@ mod tests {
                 .unwrap();
 
             // Load with threshold of 100 bytes - should be small file (< threshold)
-            let buffer2 = TextBuffer::load_from_file(&file_path2, 100).unwrap();
+            let buffer2 = TextBuffer::load_from_file(&file_path2, 100, test_fs()).unwrap();
             assert!(!buffer2.large_file);
         }
 
@@ -3328,7 +3315,7 @@ mod tests {
                 .unwrap();
 
             // Load with threshold 0 - should use DEFAULT_LARGE_FILE_THRESHOLD
-            let buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+            let buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
             // 5 bytes < 100MB, so should not be large file
             assert!(!buffer.large_file);
@@ -3346,7 +3333,7 @@ mod tests {
                 .unwrap();
 
             // Load as large file
-            let buffer = TextBuffer::load_from_file(&file_path, 5).unwrap();
+            let buffer = TextBuffer::load_from_file(&file_path, 5, test_fs()).unwrap();
 
             // Should have correct total bytes
             assert_eq!(buffer.total_bytes(), test_data.len());
@@ -3367,7 +3354,7 @@ mod tests {
             File::create(&file_path).unwrap();
 
             // Load as large file
-            let buffer = TextBuffer::load_from_file(&file_path, 0).unwrap();
+            let buffer = TextBuffer::load_from_file(&file_path, 0, test_fs()).unwrap();
 
             // Empty file is handled gracefully
             assert_eq!(buffer.total_bytes(), 0);
@@ -3387,7 +3374,7 @@ mod tests {
                 .unwrap();
 
             // Load as large file (use small threshold to trigger large file mode)
-            let mut buffer = TextBuffer::load_from_file(&file_path, 10).unwrap();
+            let mut buffer = TextBuffer::load_from_file(&file_path, 10, test_fs()).unwrap();
 
             // Verify it's in large file mode
             assert!(buffer.large_file);
@@ -3477,7 +3464,7 @@ mod tests {
             file.flush().unwrap();
 
             // Load as large file (use threshold of 1 byte to ensure large file mode)
-            let mut buffer = TextBuffer::load_from_file(&file_path, 1).unwrap();
+            let mut buffer = TextBuffer::load_from_file(&file_path, 1, test_fs()).unwrap();
 
             // Verify it's in large file mode
             assert!(buffer.large_file);
@@ -3531,7 +3518,7 @@ mod tests {
 
             // Most importantly: validate the entire buffer content matches the original file
             // Create a fresh buffer to read the original file
-            let mut buffer2 = TextBuffer::load_from_file(&file_path, 1).unwrap();
+            let mut buffer2 = TextBuffer::load_from_file(&file_path, 1, test_fs()).unwrap();
 
             // Read the entire file in chunks and verify each chunk
             let chunk_read_size = 64 * 1024; // Read in 64KB chunks for efficiency
@@ -3585,7 +3572,7 @@ mod tests {
             file.flush().unwrap();
 
             // Load as large file (threshold of 100 bytes)
-            let mut buffer = TextBuffer::load_from_file(&file_path, 100).unwrap();
+            let mut buffer = TextBuffer::load_from_file(&file_path, 100, test_fs()).unwrap();
             assert!(buffer.large_file);
             assert_eq!(buffer.total_bytes(), file_size);
 
@@ -3648,7 +3635,7 @@ mod tests {
             std::fs::write(&file_path, &content).unwrap();
 
             // Load as large file (threshold of 500 bytes)
-            let mut buffer = TextBuffer::load_from_file(&file_path, 500).unwrap();
+            let mut buffer = TextBuffer::load_from_file(&file_path, 500, test_fs()).unwrap();
             assert!(
                 buffer.line_count().is_none(),
                 "Should be in large file mode"
@@ -3697,7 +3684,7 @@ mod tests {
         // Line 2: "c\n" (bytes 4-5, newline at 5)
         // Line 3: "d" (bytes 6, no newline)
         let content = b"a\nb\nc\nd";
-        let buffer = TextBuffer::from_bytes(content.to_vec());
+        let buffer = TextBuffer::from_bytes(content.to_vec(), test_fs());
 
         // Verify specific positions
         let pos = buffer
@@ -3740,7 +3727,7 @@ mod tests {
     #[test]
     fn test_offset_to_position_after_insert() {
         // Start with simple content
-        let mut buffer = TextBuffer::from_bytes(b"a\nb\n".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"a\nb\n".to_vec(), test_fs());
 
         // Insert at position 2 (start of line 1)
         buffer.insert_at_position(Position { line: 1, column: 0 }, b"x\n".to_vec());
@@ -3775,7 +3762,7 @@ mod tests {
     #[test]
     fn test_offset_to_position_empty_lines() {
         // Test with empty lines: "\n\n\n"
-        let buffer = TextBuffer::from_bytes(b"\n\n\n".to_vec());
+        let buffer = TextBuffer::from_bytes(b"\n\n\n".to_vec(), test_fs());
 
         // Line 0: "\n" (byte 0)
         // Line 1: "\n" (byte 1)
@@ -3811,7 +3798,7 @@ mod tests {
         content.extend_from_slice(b"bbbbbbbbbb\n"); // Line 1: 11 bytes
         content.extend_from_slice(b"cccccccccc"); // Line 2: 10 bytes (no newline)
 
-        let buffer = TextBuffer::from_bytes(content.clone());
+        let buffer = TextBuffer::from_bytes(content.clone(), test_fs());
 
         // Test positions at start of each line
         let pos = buffer
@@ -3849,7 +3836,7 @@ mod tests {
     #[test]
     fn test_line_iterator_with_offset_to_position() {
         // This combines line iterator with offset_to_position to find issues
-        let mut buffer = TextBuffer::from_bytes(b"line0\nline1\nline2\n".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"line0\nline1\nline2\n".to_vec(), test_fs());
 
         // Test creating line iterator at various positions
         for byte_pos in 0..=buffer.len() {
@@ -3875,7 +3862,7 @@ mod tests {
     #[test]
     fn test_piece_tree_line_count_after_insert() {
         // Debug the piece tree structure after insert
-        let mut buffer = TextBuffer::from_bytes(b"a\nb\n".to_vec());
+        let mut buffer = TextBuffer::from_bytes(b"a\nb\n".to_vec(), test_fs());
 
         // Insert at line 1, column 0
         buffer.insert_at_position(Position { line: 1, column: 0 }, b"x\n".to_vec());
@@ -3902,7 +3889,7 @@ mod tests {
 
         // Initial content: "fn foo(val: i32) {\n    val + 1\n}\n"
         let initial = b"fn foo(val: i32) {\n    val + 1\n}\n";
-        let mut buffer = TextBuffer::from_bytes(initial.to_vec());
+        let mut buffer = TextBuffer::from_bytes(initial.to_vec(), test_fs());
 
         // Verify initial positions work correctly
         // Position 23 is 'v' of second "val" on line 1
@@ -4002,7 +3989,7 @@ mod tests {
         std::fs::write(&file_path, &original_content).unwrap();
 
         // Load with small threshold to trigger large file mode
-        let mut buffer = TextBuffer::load_from_file(&file_path, 1024).unwrap();
+        let mut buffer = TextBuffer::load_from_file(&file_path, 1024, test_fs()).unwrap();
         assert!(buffer.large_file, "Should be in large file mode");
         assert!(!buffer.buffers[0].is_loaded(), "Buffer should be unloaded");
 
@@ -4093,7 +4080,7 @@ mod tests {
 
         #[test]
         fn test_set_line_ending_marks_modified() {
-            let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\n".to_vec());
+            let mut buffer = TextBuffer::from_bytes(b"Hello\nWorld\n".to_vec(), test_fs());
             assert!(!buffer.is_modified());
 
             buffer.set_line_ending(LineEnding::CRLF);
@@ -4102,7 +4089,7 @@ mod tests {
 
         #[test]
         fn test_set_default_line_ending_does_not_mark_modified() {
-            let mut buffer = TextBuffer::empty();
+            let mut buffer = TextBuffer::empty(test_fs());
             assert!(!buffer.is_modified());
 
             buffer.set_default_line_ending(LineEnding::CRLF);
@@ -4123,7 +4110,8 @@ mod tests {
 
             // Load the file
             let mut buffer =
-                TextBuffer::load_from_file(&file_path, DEFAULT_LARGE_FILE_THRESHOLD).unwrap();
+                TextBuffer::load_from_file(&file_path, DEFAULT_LARGE_FILE_THRESHOLD, test_fs())
+                    .unwrap();
             assert_eq!(buffer.line_ending(), LineEnding::LF);
 
             // Change line ending to CRLF
@@ -4152,7 +4140,8 @@ mod tests {
 
             // Load the file
             let mut buffer =
-                TextBuffer::load_from_file(&file_path, DEFAULT_LARGE_FILE_THRESHOLD).unwrap();
+                TextBuffer::load_from_file(&file_path, DEFAULT_LARGE_FILE_THRESHOLD, test_fs())
+                    .unwrap();
             assert_eq!(buffer.line_ending(), LineEnding::CRLF);
 
             // Change line ending to LF
@@ -4185,7 +4174,7 @@ mod tests {
             // Make directory unwritable to prevent rename/temp file creation
             std::fs::set_permissions(&unwritable_dir, Permissions::from_mode(0o555))?;
 
-            let mut buffer = TextBuffer::from_bytes(b"new content".to_vec());
+            let mut buffer = TextBuffer::from_bytes(b"new content".to_vec(), test_fs());
             let result = buffer.save_to_file(&file_path);
 
             // Verify that it returns SudoSaveRequired
@@ -4222,7 +4211,7 @@ mod tests {
             // Make directory unwritable (no write allowed)
             std::fs::set_permissions(&unwritable_dir, Permissions::from_mode(0o555))?;
 
-            let mut buffer = TextBuffer::from_bytes(b"content".to_vec());
+            let mut buffer = TextBuffer::from_bytes(b"content".to_vec(), test_fs());
             let result = buffer.save_to_file(&file_path);
 
             match result {
@@ -4248,6 +4237,12 @@ mod tests {
 
 #[cfg(test)]
 mod property_tests {
+    use crate::model::filesystem::StdFileSystem;
+    use std::sync::Arc;
+
+    fn test_fs() -> Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> {
+        Arc::new(StdFileSystem)
+    }
     use super::*;
     use proptest::prelude::*;
 
@@ -4281,7 +4276,7 @@ mod property_tests {
     proptest! {
         #[test]
         fn prop_line_count_consistent(text in text_with_newlines()) {
-            let buffer = TextBuffer::from_bytes(text.clone());
+            let buffer = TextBuffer::from_bytes(text.clone(), test_fs());
 
             let newline_count = text.iter().filter(|&&b| b == b'\n').count();
             prop_assert_eq!(buffer.line_count(), Some(newline_count + 1));
@@ -4289,7 +4284,7 @@ mod property_tests {
 
         #[test]
         fn prop_get_all_text_matches_original(text in text_with_newlines()) {
-            let buffer = TextBuffer::from_bytes(text.clone());
+            let buffer = TextBuffer::from_bytes(text.clone(), test_fs());
             prop_assert_eq!(buffer.get_all_text().unwrap(), text);
         }
 
@@ -4299,7 +4294,7 @@ mod property_tests {
             offset in 0usize..100,
             insert_text in text_with_newlines()
         ) {
-            let mut buffer = TextBuffer::from_bytes(text);
+            let mut buffer = TextBuffer::from_bytes(text, test_fs());
             let initial_bytes = buffer.total_bytes();
 
             let offset = offset.min(buffer.total_bytes());
@@ -4318,7 +4313,7 @@ mod property_tests {
                 return Ok(());
             }
 
-            let mut buffer = TextBuffer::from_bytes(text);
+            let mut buffer = TextBuffer::from_bytes(text, test_fs());
             let initial_bytes = buffer.total_bytes();
 
             let offset = offset.min(buffer.total_bytes());
@@ -4339,7 +4334,7 @@ mod property_tests {
             offset in 0usize..100,
             insert_text in text_with_newlines()
         ) {
-            let mut buffer = TextBuffer::from_bytes(text.clone());
+            let mut buffer = TextBuffer::from_bytes(text.clone(), test_fs());
 
             let offset = offset.min(buffer.total_bytes());
             buffer.insert_bytes(offset, insert_text.clone());
@@ -4350,7 +4345,7 @@ mod property_tests {
 
         #[test]
         fn prop_offset_position_roundtrip(text in text_with_newlines()) {
-            let buffer = TextBuffer::from_bytes(text.clone());
+            let buffer = TextBuffer::from_bytes(text.clone(), test_fs());
 
             for offset in 0..text.len() {
                 let pos = buffer.offset_to_position(offset).expect("offset_to_position should succeed for valid offset");
@@ -4369,7 +4364,7 @@ mod property_tests {
                 return Ok(());
             }
 
-            let buffer = TextBuffer::from_bytes(text.clone());
+            let buffer = TextBuffer::from_bytes(text.clone(), test_fs());
             let offset = offset.min(buffer.total_bytes());
             let length = length.min(buffer.total_bytes() - offset);
 
@@ -4383,7 +4378,7 @@ mod property_tests {
 
         #[test]
         fn prop_operations_maintain_consistency(operations in operation_strategy()) {
-            let mut buffer = TextBuffer::from_bytes(b"initial\ntext".to_vec());
+            let mut buffer = TextBuffer::from_bytes(b"initial\ntext".to_vec(), test_fs());
             let mut expected_text = b"initial\ntext".to_vec();
 
             for op in operations {
@@ -4416,7 +4411,7 @@ mod property_tests {
 
         #[test]
         fn prop_line_count_never_zero(operations in operation_strategy()) {
-            let mut buffer = TextBuffer::from_bytes(b"test".to_vec());
+            let mut buffer = TextBuffer::from_bytes(b"test".to_vec(), test_fs());
 
             for op in operations {
                 match op {
@@ -4436,7 +4431,7 @@ mod property_tests {
 
         #[test]
         fn prop_total_bytes_never_negative(operations in operation_strategy()) {
-            let mut buffer = TextBuffer::from_bytes(b"test".to_vec());
+            let mut buffer = TextBuffer::from_bytes(b"test".to_vec(), test_fs());
 
             for op in operations {
                 match op {
@@ -4456,7 +4451,7 @@ mod property_tests {
 
         #[test]
         fn prop_piece_tree_and_line_index_stay_synced(operations in operation_strategy()) {
-            let mut buffer = TextBuffer::from_bytes(b"line1\nline2\nline3".to_vec());
+            let mut buffer = TextBuffer::from_bytes(b"line1\nline2\nline3".to_vec(), test_fs());
 
             for op in operations {
                 match op {

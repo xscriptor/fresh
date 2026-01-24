@@ -139,6 +139,13 @@ impl SettingsLayout {
             }
         }
 
+        // Check search results (before regular items, since they replace the item list during search)
+        for (idx, result) in self.search_results.iter().enumerate() {
+            if self.contains(result.area, x, y) {
+                return Some(SettingsHit::SearchResult(idx));
+            }
+        }
+
         // Check setting items
         for item in &self.items {
             if self.contains(item.area, x, y) {
@@ -164,8 +171,21 @@ impl SettingsLayout {
                             return Some(SettingsHit::Item(item.index));
                         }
                     }
-                    ControlLayoutInfo::Dropdown(area) => {
-                        if self.contains(*area, x, y) {
+                    ControlLayoutInfo::Dropdown {
+                        button_area,
+                        option_areas,
+                        scroll_offset,
+                    } => {
+                        // Check option areas first (when dropdown is open)
+                        for (i, area) in option_areas.iter().enumerate() {
+                            if self.contains(*area, x, y) {
+                                return Some(SettingsHit::ControlDropdownOption(
+                                    item.index,
+                                    scroll_offset + i,
+                                ));
+                            }
+                        }
+                        if self.contains(*button_area, x, y) {
                             return Some(SettingsHit::ControlDropdown(item.index));
                         }
                     }
@@ -181,7 +201,16 @@ impl SettingsLayout {
                             }
                         }
                     }
-                    ControlLayoutInfo::Map { entry_rows } => {
+                    ControlLayoutInfo::Map {
+                        entry_rows,
+                        add_row_area,
+                    } => {
+                        // Check click on add-new row first (so it has priority)
+                        if let Some(add_area) = add_row_area {
+                            if self.contains(*add_area, x, y) {
+                                return Some(SettingsHit::ControlMapAddNew(item.index));
+                            }
+                        }
                         for (row_idx, row_area) in entry_rows.iter().enumerate() {
                             if self.contains(*row_area, x, y) {
                                 return Some(SettingsHit::ControlMapRow(item.index, row_idx));
@@ -241,6 +270,8 @@ pub enum SettingsHit {
     Category(usize),
     /// Click on a setting item (index)
     Item(usize),
+    /// Click on a search result (index in search_results)
+    SearchResult(usize),
     /// Click on toggle control
     ControlToggle(usize),
     /// Click on number decrement button
@@ -249,12 +280,16 @@ pub enum SettingsHit {
     ControlIncrement(usize),
     /// Click on dropdown button
     ControlDropdown(usize),
+    /// Click on dropdown option (item_idx, option_idx)
+    ControlDropdownOption(usize, usize),
     /// Click on text input
     ControlText(usize),
     /// Click on text list row (item_idx, row_idx)
     ControlTextListRow(usize, usize),
     /// Click on map row (item_idx, row_idx)
     ControlMapRow(usize, usize),
+    /// Click on map add-new row (item_idx)
+    ControlMapAddNew(usize),
     /// Click on layer button
     LayerButton,
     /// Click on edit config file button

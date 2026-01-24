@@ -52,16 +52,16 @@ pub fn render_dropdown_aligned(
     let (label_color, selected_color, border_color, arrow_color) = match state.focus {
         FocusState::Normal => (colors.label, colors.selected, colors.border, colors.arrow),
         FocusState::Focused => (
-            colors.focused,
-            colors.selected,
-            colors.focused,
-            colors.focused,
+            colors.focused_fg,
+            colors.focused_fg,
+            colors.focused_fg,
+            colors.focused_fg,
         ),
         FocusState::Hovered => (
-            colors.focused,
-            colors.selected,
-            colors.focused,
-            colors.focused,
+            colors.focused_fg,
+            colors.focused_fg,
+            colors.focused_fg,
+            colors.focused_fg,
         ),
         FocusState::Disabled => (
             colors.disabled,
@@ -129,8 +129,11 @@ pub fn render_dropdown_aligned(
             option_areas.push(option_area);
 
             let is_selected = actual_index == state.selected;
+            let is_hovered = state.hover_index == Some(actual_index);
             let (bg, fg) = if is_selected {
                 (colors.highlight_bg, colors.selected)
+            } else if is_hovered {
+                (colors.hover_bg, colors.option)
             } else {
                 (Color::Reset, colors.option)
             };
