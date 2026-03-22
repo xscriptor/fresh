@@ -4,7 +4,7 @@
 
 <div align="center">
 
-![fresh](https://xscriptordev.github.io/badges/editors/fresh.svg) ![shell](https://xscriptordev.github.io/badges/languages/shell.svg) ![mit](https://xscriptordev.github.io/badges/licenses/mit.svg)
+![fresh](https://xscriptor.github.io/badges/editors/fresh.svg) ![shell](https://xscriptor.github.io/badges/languages/shell.svg) ![mit](https://xscriptor.github.io/badges/licenses/mit.svg)
 
 Essential settings to improve accessibility of Fresh using the Xscriptor themes.
 
@@ -72,11 +72,11 @@ Custom color themes for Fresh, the terminal text editor. This repository contain
 Run the installer remotely with either curl or wget:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xscriptordev/fresh/main/installer.sh | bash
+curl -fsSL https://raw.githubusercontent.com/xscriptor/fresh/main/installer.sh | bash
 ```
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/xscriptordev/fresh/main/installer.sh | bash
+wget -qO- https://raw.githubusercontent.com/xscriptor/fresh/main/installer.sh | bash
 ```
 
 The installer creates `~/.config/fresh/themes` if it does not exist and copies all themes there.
@@ -86,11 +86,11 @@ The installer creates `~/.config/fresh/themes` if it does not exist and copies a
 Remove the installed themes with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xscriptordev/fresh/main/uninstaller.sh | bash
+curl -fsSL https://raw.githubusercontent.com/xscriptor/fresh/main/uninstaller.sh | bash
 ```
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/xscriptordev/fresh/main/uninstaller.sh | bash
+wget -qO- https://raw.githubusercontent.com/xscriptor/fresh/main/uninstaller.sh | bash
 ```
 
 This removes the themes provided by this repository. If the directory becomes empty, it is removed.

@@ -3,7 +3,7 @@ set -euo pipefail
 DEST="${HOME}/.config/fresh/themes"
 mkdir -p "${DEST}"
 TMP_DIR="$(mktemp -d)"
-URL="https://codeload.github.com/xscriptordev/fresh/tar.gz/refs/heads/main"
+URL="https://codeload.github.com/xscriptor/fresh/tar.gz/refs/heads/main"
 if command -v curl >/dev/null 2>&1; then
   curl -fsSL "${URL}" | tar -xz -C "${TMP_DIR}"
 elif command -v wget >/dev/null 2>&1; then
