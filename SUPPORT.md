@@ -1,7 +1,7 @@
 <h1>Support</h1>
 
 <p>
-Need help with themes, XGlass, or UI mods? Use the channels below.
+Need help with themes? Use the channels below.
 </p>
 
 <h2>Get Help</h2>
