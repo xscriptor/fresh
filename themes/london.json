@@ -1,103 +1,455 @@
 {
   "name": "london",
   "editor": {
-    "bg": [255, 255, 255],
-    "fg": [0, 0, 0],
-    "cursor": [0, 0, 0],
-    "inactive_cursor": [153, 153, 153],
-    "selection_bg": [220, 220, 220],
-    "current_line_bg": [245, 245, 245],
-    "line_number_fg": [153, 153, 153],
-    "line_number_bg": [255, 255, 255],
-    "diff_add_bg": [200, 255, 200],
-    "diff_remove_bg": [255, 200, 200],
-    "diff_modify_bg": [220, 220, 220]
+    "bg": [
+      255,
+      255,
+      255
+    ],
+    "fg": [
+      51,
+      51,
+      51
+    ],
+    "cursor": [
+      51,
+      51,
+      51
+    ],
+    "inactive_cursor": [
+      153,
+      153,
+      153
+    ],
+    "selection_bg": [
+      51,
+      51,
+      51
+    ],
+    "current_line_bg": [
+      255,
+      255,
+      255
+    ],
+    "line_number_fg": [
+      153,
+      153,
+      153
+    ],
+    "line_number_bg": [
+      255,
+      255,
+      255
+    ],
+    "diff_add_bg": [
+      68,
+      68,
+      68
+    ],
+    "diff_remove_bg": [
+      51,
+      51,
+      51
+    ],
+    "diff_modify_bg": [
+      85,
+      85,
+      85
+    ]
   },
   "ui": {
-    "tab_active_fg": [0, 0, 0],
-    "tab_active_bg": [255, 255, 255],
-    "tab_inactive_fg": [136, 136, 136],
-    "tab_inactive_bg": [240, 240, 240],
-    "tab_separator_bg": [200, 200, 200],
-    "tab_close_hover_fg": [0, 0, 0],
-    "tab_hover_bg": [230, 230, 230],
-    "menu_bg": [255, 255, 255],
-    "menu_fg": [51, 51, 51],
-    "menu_active_bg": [240, 240, 240],
-    "menu_active_fg": [0, 0, 0],
-    "menu_dropdown_bg": [255, 255, 255],
-    "menu_dropdown_fg": [51, 51, 51],
-    "menu_highlight_bg": [51, 51, 51],
-    "menu_highlight_fg": [255, 255, 255],
-    "menu_border_fg": [200, 200, 200],
-    "menu_separator_fg": [200, 200, 200],
-    "menu_hover_bg": [240, 240, 240],
-    "menu_hover_fg": [0, 0, 0],
-    "menu_disabled_fg": [170, 170, 170],
-    "menu_disabled_bg": [255, 255, 255],
-    "status_bar_fg": [51, 51, 51],
-    "status_bar_bg": [240, 240, 240],
-    "prompt_fg": [0, 0, 0],
-    "prompt_bg": [255, 255, 255],
-    "prompt_selection_fg": [255, 255, 255],
-    "prompt_selection_bg": [51, 51, 51],
-    "popup_border_fg": [200, 200, 200],
-    "popup_bg": [255, 255, 255],
-    "popup_selection_fg": [255, 255, 255],
-    "popup_selection_bg": [51, 51, 51],
-    "popup_text_fg": [0, 0, 0],
-    "suggestion_bg": [255, 255, 255],
-    "suggestion_selected_bg": [51, 51, 51],
-    "help_bg": [255, 255, 255],
-    "help_fg": [0, 0, 0],
-    "help_key_fg": [85, 85, 85],
-    "help_separator_fg": [200, 200, 200],
-    "help_indicator_fg": [51, 51, 51],
-    "help_indicator_bg": [255, 255, 255],
-    "inline_code_bg": [230, 230, 230],
-    "split_separator_fg": [200, 200, 200],
-    "split_separator_hover_fg": [0, 0, 0],
-    "scrollbar_track_fg": [240, 240, 240],
-    "scrollbar_thumb_fg": [170, 170, 170],
-    "scrollbar_track_hover_fg": [240, 240, 240],
-    "scrollbar_thumb_hover_fg": [85, 85, 85],
-    "compose_margin_bg": [245, 245, 245],
-    "semantic_highlight_bg": [230, 230, 230],
+    "tab_active_fg": [
+      85,
+      85,
+      85
+    ],
+    "tab_active_bg": [
+      255,
+      255,
+      255
+    ],
+    "tab_inactive_fg": [
+      136,
+      136,
+      136
+    ],
+    "tab_inactive_bg": [
+      255,
+      255,
+      255
+    ],
+    "tab_separator_bg": [
+      51,
+      51,
+      51
+    ],
+    "tab_close_hover_fg": [
+      51,
+      51,
+      51
+    ],
+    "tab_hover_bg": [
+      255,
+      255,
+      255
+    ],
+    "menu_bg": [
+      255,
+      255,
+      255
+    ],
+    "menu_fg": [
+      51,
+      51,
+      51
+    ],
+    "menu_active_bg": [
+      255,
+      255,
+      255
+    ],
+    "menu_active_fg": [
+      85,
+      85,
+      85
+    ],
+    "menu_dropdown_bg": [
+      255,
+      255,
+      255
+    ],
+    "menu_dropdown_fg": [
+      51,
+      51,
+      51
+    ],
+    "menu_highlight_bg": [
+      51,
+      51,
+      51
+    ],
+    "menu_highlight_fg": [
+      255,
+      255,
+      255
+    ],
+    "menu_border_fg": [
+      51,
+      51,
+      51
+    ],
+    "menu_separator_fg": [
+      51,
+      51,
+      51
+    ],
+    "menu_hover_bg": [
+      255,
+      255,
+      255
+    ],
+    "menu_hover_fg": [
+      85,
+      85,
+      85
+    ],
+    "menu_disabled_fg": [
+      170,
+      170,
+      170
+    ],
+    "menu_disabled_bg": [
+      255,
+      255,
+      255
+    ],
+    "status_bar_fg": [
+      51,
+      51,
+      51
+    ],
+    "status_bar_bg": [
+      255,
+      255,
+      255
+    ],
+    "prompt_fg": [
+      51,
+      51,
+      51
+    ],
+    "prompt_bg": [
+      255,
+      255,
+      255
+    ],
+    "prompt_selection_fg": [
+      255,
+      255,
+      255
+    ],
+    "prompt_selection_bg": [
+      51,
+      51,
+      51
+    ],
+    "popup_border_fg": [
+      51,
+      51,
+      51
+    ],
+    "popup_bg": [
+      255,
+      255,
+      255
+    ],
+    "popup_selection_fg": [
+      255,
+      255,
+      255
+    ],
+    "popup_selection_bg": [
+      51,
+      51,
+      51
+    ],
+    "popup_text_fg": [
+      51,
+      51,
+      51
+    ],
+    "suggestion_bg": [
+      255,
+      255,
+      255
+    ],
+    "suggestion_selected_bg": [
+      51,
+      51,
+      51
+    ],
+    "help_bg": [
+      255,
+      255,
+      255
+    ],
+    "help_fg": [
+      51,
+      51,
+      51
+    ],
+    "help_key_fg": [
+      85,
+      85,
+      85
+    ],
+    "help_separator_fg": [
+      51,
+      51,
+      51
+    ],
+    "help_indicator_fg": [
+      51,
+      51,
+      51
+    ],
+    "help_indicator_bg": [
+      255,
+      255,
+      255
+    ],
+    "inline_code_bg": [
+      51,
+      51,
+      51
+    ],
+    "split_separator_fg": [
+      51,
+      51,
+      51
+    ],
+    "split_separator_hover_fg": [
+      85,
+      85,
+      85
+    ],
+    "scrollbar_track_fg": [
+      255,
+      255,
+      255
+    ],
+    "scrollbar_thumb_fg": [
+      170,
+      170,
+      170
+    ],
+    "scrollbar_track_hover_fg": [
+      255,
+      255,
+      255
+    ],
+    "scrollbar_thumb_hover_fg": [
+      85,
+      85,
+      85
+    ],
+    "compose_margin_bg": [
+      255,
+      255,
+      255
+    ],
+    "semantic_highlight_bg": [
+      255,
+      255,
+      255
+    ],
     "terminal_bg": "Default",
     "terminal_fg": "Default",
-    "status_warning_indicator_bg": [136, 136, 136],
-    "status_warning_indicator_fg": [255, 255, 255],
-    "status_error_indicator_bg": [51, 51, 51],
-    "status_error_indicator_fg": [255, 255, 255],
-    "status_warning_indicator_hover_bg": [100, 100, 100],
-    "status_warning_indicator_hover_fg": [255, 255, 255],
-    "status_error_indicator_hover_bg": [30, 30, 30],
-    "status_error_indicator_hover_fg": [255, 255, 255],
-    "tab_drop_zone_bg": [51, 51, 51],
-    "tab_drop_zone_border": [85, 85, 85]
+    "status_warning_indicator_bg": [
+      136,
+      136,
+      136
+    ],
+    "status_warning_indicator_fg": [
+      255,
+      255,
+      255
+    ],
+    "status_error_indicator_bg": [
+      51,
+      51,
+      51
+    ],
+    "status_error_indicator_fg": [
+      255,
+      255,
+      255
+    ],
+    "status_warning_indicator_hover_bg": [
+      85,
+      85,
+      85
+    ],
+    "status_warning_indicator_hover_fg": [
+      255,
+      255,
+      255
+    ],
+    "status_error_indicator_hover_bg": [
+      51,
+      51,
+      51
+    ],
+    "status_error_indicator_hover_fg": [
+      255,
+      255,
+      255
+    ],
+    "tab_drop_zone_bg": [
+      51,
+      51,
+      51
+    ],
+    "tab_drop_zone_border": [
+      85,
+      85,
+      85
+    ]
   },
   "search": {
-    "match_bg": [170, 170, 170],
-    "match_fg": [0, 0, 0]
+    "match_bg": [
+      170,
+      170,
+      170
+    ],
+    "match_fg": [
+      255,
+      255,
+      255
+    ]
   },
   "diagnostic": {
-    "error_fg": [0, 0, 0],
-    "error_bg": [255, 150, 150],
-    "warning_fg": [51, 51, 51],
-    "warning_bg": [255, 240, 150],
-    "info_fg": [85, 85, 85],
-    "info_bg": [200, 230, 255],
-    "hint_fg": [136, 136, 136],
-    "hint_bg": [255, 255, 255]
+    "error_fg": [
+      51,
+      51,
+      51
+    ],
+    "error_bg": [
+      51,
+      51,
+      51
+    ],
+    "warning_fg": [
+      51,
+      51,
+      51
+    ],
+    "warning_bg": [
+      51,
+      51,
+      51
+    ],
+    "info_fg": [
+      85,
+      85,
+      85
+    ],
+    "info_bg": [
+      51,
+      51,
+      51
+    ],
+    "hint_fg": [
+      136,
+      136,
+      136
+    ],
+    "hint_bg": [
+      255,
+      255,
+      255
+    ]
   },
   "syntax": {
-    "keyword": [0, 0, 0],
-    "string": [102, 102, 102],
-    "function": [51, 51, 51],
-    "type": [68, 68, 68],
-    "variable": [0, 0, 0],
-    "constant": [85, 85, 85],
-    "operator": [51, 51, 51],
-    "comment": [153, 153, 153]
+    "keyword": [
+      85,
+      85,
+      85
+    ],
+    "string": [
+      102,
+      102,
+      102
+    ],
+    "function": [
+      51,
+      51,
+      51
+    ],
+    "type": [
+      68,
+      68,
+      68
+    ],
+    "variable": [
+      51,
+      51,
+      51
+    ],
+    "constant": [
+      85,
+      85,
+      85
+    ],
+    "operator": [
+      51,
+      51,
+      51
+    ],
+    "comment": [
+      153,
+      153,
+      153
+    ]
   }
 }

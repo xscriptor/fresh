@@ -1,0 +1,43 @@
+name: Theme CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate JSON syntax
+        run: |
+          for f in themes/*.json; do
+            echo "Validating $f"
+            python3 -m json.tool "$f" > /dev/null
+          done
+
+      - name: Verify all colors match palettes
+        run: python3 scripts/verify_themes.py
+
+      - name: Generate dist themes from colors.md
+        run: python3 scripts/generate_themes.py
+
+      - name: Verify dist themes are valid JSON
+        run: |
+          for f in dist/*.json; do
+            python3 -m json.tool "$f" > /dev/null
+          done

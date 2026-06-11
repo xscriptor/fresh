@@ -1,8 +1,12 @@
 <h1 align="center">Fresh Xscriptor</h1>
 <div align="center">
-    <img src="https://xscriptor.github.io/badges/editors/fresh.svg" alt="Fresh Editor Badge" />
-    <img src="https://xscriptor.github.io/badges/languages/shell.svg" alt="Shell Language Badge" />
-    <img src="https://xscriptor.github.io/badges/licenses/mit.svg" alt="MIT License Badge" />
+    <img src="https://img.shields.io/github/license/xscriptor/fresh?style=flat-square" alt="MIT License" />
+    <img src="https://img.shields.io/github/stars/xscriptor/fresh?style=flat-square" alt="GitHub Stars" />
+    <img src="https://img.shields.io/github/v/release/xscriptor/fresh?style=flat-square" alt="Release" />
+    <img src="https://img.shields.io/github/last-commit/xscriptor/fresh?style=flat-square" alt="Last Commit" />
+    <img src="https://img.shields.io/github/repo-size/xscriptor/fresh?style=flat-square" alt="Repo Size" />
+    <img src="https://img.shields.io/badge/Built%20for-Fresh-1EAE9B?style=flat-square" alt="Fresh" />
+    <img src="https://img.shields.io/badge/Rust-1.70+-dea584?style=flat-square&logo=rust" alt="Rust" />
 </div>
 
 <p align="center"><em>Essential settings to improve accessibility of Fresh using the Xscriptor themes.</em></p>
@@ -124,11 +128,13 @@ cp -f themes/*.json ~/.config/fresh/themes/
     <li>bogota</li>
     <li>helsinki</li>
     <li>lahabana</li>
+    <li>london</li>
     <li>madrid</li>
     <li>miami</li>
     <li>oslo</li>
     <li>paris</li>
     <li>praha</li>
+    <li>tokio</li>
     <li>x</li>
 </ul>
 
@@ -143,6 +149,8 @@ cp -f themes/*.json ~/.config/fresh/themes/
 <h2 align="center" id="related-documents">Related Documents</h2>
 
 <ul>
+  <li><a href="./docs/themes.md">Theme System</a></li>
+  <li><a href="./colors.md">Palettes</a></li>
   <li><a href="./LICENSE">License</a></li>
   <li><a href="./CODE_OF_CONDUCT.md">Code of Conduct</a></li>
   <li><a href="./CONTRIBUTING.md">Contributions</a></li>
