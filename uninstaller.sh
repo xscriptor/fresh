@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 DEST="${HOME}/.config/fresh/themes"
-FILES="berlin.json bogota.json helsinki.json lahabana.json madrid.json miami.json oslo.json paris.json praha.json x.json"
+FILES="berlin.json bogota.json helsinki.json lahabana.json london.json madrid.json miami.json oslo.json paris.json praha.json tokio.json x.json"
 for f in ${FILES}; do
   if [ -f "${DEST}/${f}" ]; then
     rm -f "${DEST}/${f}"

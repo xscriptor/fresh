@@ -1,5 +1,5 @@
 {
-  "name": "lahabana",
+  "name": "tokio",
   "editor": {
     "bg": [
       54,
@@ -52,16 +52,16 @@
       141
     ],
     "diff_modify_bg": [
+      252,
       229,
-      255,
-      157
+      102
     ]
   },
   "ui": {
     "tab_active_fg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "tab_active_bg": [
       54,
@@ -109,9 +109,9 @@
       55
     ],
     "menu_active_fg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "menu_dropdown_bg": [
       54,
@@ -124,9 +124,9 @@
       255
     ],
     "menu_highlight_bg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "menu_highlight_fg": [
       54,
@@ -149,9 +149,9 @@
       55
     ],
     "menu_hover_fg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "menu_disabled_fg": [
       105,
@@ -189,9 +189,9 @@
       55
     ],
     "prompt_selection_bg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "popup_border_fg": [
       105,
@@ -203,10 +203,15 @@
       53,
       55
     ],
+    "popup_selection_fg": [
+      54,
+      53,
+      55
+    ],
     "popup_selection_bg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "popup_text_fg": [
       247,
@@ -219,9 +224,9 @@
       55
     ],
     "suggestion_selected_bg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "help_bg": [
       54,
@@ -234,9 +239,9 @@
       255
     ],
     "help_key_fg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "help_separator_fg": [
       105,
@@ -264,14 +269,14 @@
       108
     ],
     "split_separator_hover_fg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "scrollbar_track_fg": [
-      105,
-      103,
-      108
+      54,
+      53,
+      55
     ],
     "scrollbar_thumb_fg": [
       105,
@@ -279,14 +284,14 @@
       108
     ],
     "scrollbar_track_hover_fg": [
-      105,
-      103,
-      108
+      54,
+      53,
+      55
     ],
     "scrollbar_thumb_hover_fg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "compose_margin_bg": [
       54,
@@ -301,9 +306,9 @@
     "terminal_bg": "Default",
     "terminal_fg": "Default",
     "status_warning_indicator_bg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "status_warning_indicator_fg": [
       54,
@@ -321,9 +326,9 @@
       255
     ],
     "status_warning_indicator_hover_bg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "status_warning_indicator_hover_fg": [
       54,
@@ -341,26 +346,21 @@
       255
     ],
     "tab_drop_zone_bg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "tab_drop_zone_border": [
+      252,
       229,
-      255,
-      157
-    ],
-    "popup_selection_fg": [
-      54,
-      53,
-      55
+      102
     ]
   },
   "search": {
     "match_bg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "match_fg": [
       54,
@@ -380,9 +380,9 @@
       108
     ],
     "warning_fg": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "warning_bg": [
       105,
@@ -412,14 +412,14 @@
   },
   "syntax": {
     "keyword": [
+      252,
       229,
-      255,
-      157
+      102
     ],
     "string": [
-      253,
-      147,
-      83
+      123,
+      216,
+      143
     ],
     "function": [
       90,
@@ -437,14 +437,14 @@
       255
     ],
     "constant": [
-      253,
-      147,
-      83
+      123,
+      216,
+      143
     ],
     "operator": [
-      247,
-      241,
-      255
+      148,
+      138,
+      227
     ],
     "comment": [
       105,

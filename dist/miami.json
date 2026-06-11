@@ -1,10 +1,10 @@
 {
-  "name": "lahabana",
+  "name": "miami",
   "editor": {
     "bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "fg": [
       247,
@@ -27,9 +27,9 @@
       108
     ],
     "current_line_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "line_number_fg": [
       105,
@@ -37,36 +37,36 @@
       108
     ],
     "line_number_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "diff_add_bg": [
-      123,
-      216,
-      143
+      127,
+      255,
+      212
     ],
     "diff_remove_bg": [
-      252,
-      97,
-      141
+      255,
+      76,
+      139
     ],
     "diff_modify_bg": [
-      229,
       255,
-      157
+      216,
+      76
     ]
   },
   "ui": {
     "tab_active_fg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "tab_active_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "tab_inactive_fg": [
       105,
@@ -74,9 +74,9 @@
       108
     ],
     "tab_inactive_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "tab_separator_bg": [
       105,
@@ -84,19 +84,19 @@
       108
     ],
     "tab_close_hover_fg": [
-      252,
-      97,
-      141
+      255,
+      76,
+      139
     ],
     "tab_hover_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "menu_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "menu_fg": [
       247,
@@ -104,19 +104,19 @@
       255
     ],
     "menu_active_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "menu_active_fg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "menu_dropdown_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "menu_dropdown_fg": [
       247,
@@ -124,14 +124,14 @@
       255
     ],
     "menu_highlight_bg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "menu_highlight_fg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "menu_border_fg": [
       105,
@@ -144,14 +144,14 @@
       108
     ],
     "menu_hover_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "menu_hover_fg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "menu_disabled_fg": [
       105,
@@ -159,9 +159,9 @@
       108
     ],
     "menu_disabled_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "status_bar_fg": [
       247,
@@ -169,9 +169,9 @@
       255
     ],
     "status_bar_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "prompt_fg": [
       247,
@@ -179,19 +179,19 @@
       255
     ],
     "prompt_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "prompt_selection_fg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "prompt_selection_bg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "popup_border_fg": [
       105,
@@ -199,14 +199,19 @@
       108
     ],
     "popup_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
+    ],
+    "popup_selection_fg": [
+      0,
+      0,
+      0
     ],
     "popup_selection_bg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "popup_text_fg": [
       247,
@@ -214,19 +219,19 @@
       255
     ],
     "suggestion_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "suggestion_selected_bg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "help_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "help_fg": [
       247,
@@ -234,9 +239,9 @@
       255
     ],
     "help_key_fg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "help_separator_fg": [
       105,
@@ -244,14 +249,14 @@
       108
     ],
     "help_indicator_fg": [
-      252,
-      97,
-      141
+      255,
+      76,
+      139
     ],
     "help_indicator_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "inline_code_bg": [
       105,
@@ -264,14 +269,14 @@
       108
     ],
     "split_separator_hover_fg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "scrollbar_track_fg": [
-      105,
-      103,
-      108
+      0,
+      0,
+      0
     ],
     "scrollbar_thumb_fg": [
       105,
@@ -279,41 +284,41 @@
       108
     ],
     "scrollbar_track_hover_fg": [
-      105,
-      103,
-      108
+      0,
+      0,
+      0
     ],
     "scrollbar_thumb_hover_fg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "compose_margin_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "semantic_highlight_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "terminal_bg": "Default",
     "terminal_fg": "Default",
     "status_warning_indicator_bg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "status_warning_indicator_fg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "status_error_indicator_bg": [
-      252,
-      97,
-      141
+      255,
+      76,
+      139
     ],
     "status_error_indicator_fg": [
       247,
@@ -321,19 +326,19 @@
       255
     ],
     "status_warning_indicator_hover_bg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "status_warning_indicator_hover_fg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ],
     "status_error_indicator_hover_bg": [
-      252,
-      97,
-      141
+      255,
+      76,
+      139
     ],
     "status_error_indicator_hover_fg": [
       247,
@@ -341,38 +346,33 @@
       255
     ],
     "tab_drop_zone_bg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "tab_drop_zone_border": [
-      229,
       255,
-      157
-    ],
-    "popup_selection_fg": [
-      54,
-      53,
-      55
+      216,
+      76
     ]
   },
   "search": {
     "match_bg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "match_fg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ]
   },
   "diagnostic": {
     "error_fg": [
-      252,
-      97,
-      141
+      255,
+      76,
+      139
     ],
     "error_bg": [
       105,
@@ -380,9 +380,9 @@
       108
     ],
     "warning_fg": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "warning_bg": [
       105,
@@ -390,9 +390,9 @@
       108
     ],
     "info_fg": [
-      90,
-      212,
-      230
+      71,
+      207,
+      255
     ],
     "info_bg": [
       105,
@@ -405,31 +405,31 @@
       108
     ],
     "hint_bg": [
-      54,
-      53,
-      55
+      0,
+      0,
+      0
     ]
   },
   "syntax": {
     "keyword": [
-      229,
       255,
-      157
+      216,
+      76
     ],
     "string": [
-      253,
-      147,
-      83
+      127,
+      255,
+      212
     ],
     "function": [
-      90,
-      212,
-      230
+      71,
+      207,
+      255
     ],
     "type": [
-      252,
-      97,
-      141
+      255,
+      76,
+      139
     ],
     "variable": [
       247,
@@ -437,13 +437,13 @@
       255
     ],
     "constant": [
-      253,
-      147,
-      83
+      127,
+      255,
+      212
     ],
     "operator": [
-      247,
-      241,
+      211,
+      108,
       255
     ],
     "comment": [
